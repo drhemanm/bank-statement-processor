@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign } from 'lucide-react';
+import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign, ThumbsUp, AlertTriangle, Shield, X } from 'lucide-react';
 
 const BankStatementProcessor = () => {
   const [files, setFiles] = useState([]);
@@ -9,8 +9,9 @@ const BankStatementProcessor = () => {
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
   const [combinePDFs, setCombinePDFs] = useState(false);
-  const [fileProgress, setFileProgress] = useState({}); // Track progress per file
+  const [fileProgress, setFileProgress] = useState({});
   const [processingStats, setProcessingStats] = useState({ completed: 0, total: 0, failed: 0 });
+  const [fileValidationResults, setFileValidationResults] = useState({});
   const fileInputRef = useRef(null);
 
   // Enhanced mapping rules with more MCB-specific patterns
@@ -100,7 +101,163 @@ const BankStatementProcessor = () => {
     setLogs(prev => [...prev, { message, type, timestamp }]);
   };
 
-  const handleFileUpload = (event) => {
+  // Document validation function
+  const validateDocument = async (pdf, fileName) => {
+    try {
+      addLog(`Validating document: ${fileName}...`, 'info');
+      
+      // Basic file validation
+      if (pdf.numPages === 0) {
+        return {
+          isValid: false,
+          type: 'invalid',
+          message: 'Empty PDF document',
+          suggestion: 'Please upload a valid PDF file with content.'
+        };
+      }
+
+      if (pdf.numPages > 50) {
+        return {
+          isValid: false,
+          type: 'invalid',
+          message: 'Document too large (over 50 pages)',
+          suggestion: 'Bank statements typically have fewer than 50 pages. Please verify this is the correct document.'
+        };
+      }
+
+      // Extract text from first few pages for analysis
+      let sampleText = '';
+      const pagesToCheck = Math.min(3, pdf.numPages);
+      
+      for (let pageNum = 1; pageNum <= pagesToCheck; pageNum++) {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        sampleText += pageText + '\n';
+      }
+
+      return analyzeDocumentContent(sampleText, fileName, pdf.numPages);
+
+    } catch (error) {
+      return {
+        isValid: false,
+        type: 'error',
+        message: 'Failed to validate document',
+        suggestion: 'Please try uploading the file again or contact support.'
+      };
+    }
+  };
+
+  // Content analysis function
+  const analyzeDocumentContent = (text, fileName, totalPages) => {
+    const textLength = text.length;
+    const meaningfulLines = text.split('\n').filter(line => 
+      line.trim().length > 5 && /[a-zA-Z]/.test(line) && /\d/.test(line)
+    ).length;
+
+    // Banking keywords to look for
+    const bankingKeywords = [
+      'statement', 'account', 'balance', 'transaction', 'credit', 'debit',
+      'deposit', 'withdrawal', 'transfer', 'payment', 'bank', 'mcb',
+      'mauritius commercial bank', 'account number', 'statement period',
+      'opening balance', 'closing balance', 'current balance'
+    ];
+
+    const currencyPatterns = ['MUR', 'Rs', 'rupees', 'mauritius rupees'];
+    const datePatterns = /\d{2}\/\d{2}\/\d{4}/g;
+    const amountPatterns = /[\d,]+\.?\d*\s*(?:MUR|Rs)/gi;
+
+    // Count matches
+    const bankingKeywordMatches = bankingKeywords.filter(keyword => 
+      text.toLowerCase().includes(keyword.toLowerCase())
+    ).length;
+    
+    const currencyMatches = currencyPatterns.filter(pattern => 
+      text.toLowerCase().includes(pattern.toLowerCase())
+    ).length;
+    
+    const dateMatches = (text.match(datePatterns) || []).length;
+    const amountMatches = (text.match(amountPatterns) || []).length;
+
+    // Text density analysis
+    const textDensity = textLength / totalPages;
+    const avgMeaningfulLinesPerPage = meaningfulLines / totalPages;
+
+    addLog(`Content analysis - Text: ${textLength} chars, Lines: ${meaningfulLines}, Banking terms: ${bankingKeywordMatches}`, 'info');
+
+    // Classification logic
+    if (textDensity < 100) {
+      return {
+        isValid: false,
+        type: 'scanned',
+        confidence: textDensity < 50 ? 'high' : 'medium',
+        message: 'Scanned document detected - contains mostly images',
+        suggestion: 'This appears to be a scanned PDF. For best results, please request a digital/text-based statement from your bank, or consider upgrading to our premium OCR service.',
+        details: {
+          textDensity,
+          meaningfulLines,
+          avgLinesPerPage: avgMeaningfulLinesPerPage
+        }
+      };
+    }
+
+    if (bankingKeywordMatches < 3 && currencyMatches === 0 && dateMatches < 5) {
+      return {
+        isValid: false,
+        type: 'wrong_document',
+        confidence: 'high',
+        message: 'This does not appear to be a bank statement',
+        suggestion: 'Please upload a bank statement document. Expected content includes account details, transactions, balances, and dates.',
+        details: {
+          bankingKeywords: bankingKeywordMatches,
+          currencyMatches,
+          dateMatches
+        }
+      };
+    }
+
+    if (avgMeaningfulLinesPerPage < 10) {
+      return {
+        isValid: false,
+        type: 'low_quality',
+        confidence: 'medium',
+        message: 'Low quality document or insufficient content',
+        suggestion: 'This document may be corrupted, have low text quality, or contain insufficient transaction data. Please verify the document quality.',
+        details: {
+          avgLinesPerPage: avgMeaningfulLinesPerPage,
+          textDensity
+        }
+      };
+    }
+
+    // Validation successful
+    const confidenceScore = Math.min(100, 
+      (bankingKeywordMatches * 10) + 
+      (currencyMatches * 15) + 
+      (dateMatches * 2) + 
+      (amountMatches * 3)
+    );
+
+    return {
+      isValid: true,
+      type: 'valid_statement',
+      confidence: confidenceScore > 80 ? 'high' : confidenceScore > 60 ? 'medium' : 'low',
+      message: 'Valid bank statement detected',
+      suggestion: 'Document appears to be a proper bank statement with transaction data.',
+      details: {
+        confidenceScore,
+        bankingKeywords: bankingKeywordMatches,
+        currencyMatches,
+        dateMatches,
+        amountMatches,
+        textDensity,
+        avgLinesPerPage: avgMeaningfulLinesPerPage
+      }
+    };
+  };
+
+  // Enhanced file upload with validation
+  const handleFileUpload = async (event) => {
     const uploadedFiles = Array.from(event.target.files);
     setFiles(uploadedFiles);
     setLogs([]);
@@ -108,33 +265,148 @@ const BankStatementProcessor = () => {
     setUncategorizedData([]);
     setFileStats({});
     setFileProgress({});
+    setFileValidationResults({});
     setProcessingStats({ completed: 0, total: 0, failed: 0 });
     
     // Initialize progress tracking for each file
     const initialProgress = {};
+    const validationResults = {};
+    
     uploadedFiles.forEach(file => {
       initialProgress[file.name] = {
-        status: 'pending',
+        status: 'validating',
         progress: 0,
         transactions: 0,
         error: null
       };
+      validationResults[file.name] = {
+        isValid: null,
+        type: 'pending',
+        message: 'Validating...'
+      };
     });
-    setFileProgress(initialProgress);
     
-    addLog(`${uploadedFiles.length} file(s) uploaded successfully`, 'success');
+    setFileProgress(initialProgress);
+    setFileValidationResults(validationResults);
+    
+    addLog(`${uploadedFiles.length} file(s) uploaded - starting validation...`, 'info');
+
+    // Validate each file
+    for (const file of uploadedFiles) {
+      await validateUploadedFile(file);
+    }
+  };
+
+  const validateUploadedFile = async (file) => {
+    try {
+      if (file.type === 'application/pdf') {
+        // Load PDF for validation
+        if (!window.pdfjsLib) {
+          const script = document.createElement('script');
+          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+          document.head.appendChild(script);
+          
+          await new Promise((resolve) => {
+            script.onload = () => {
+              window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+              resolve();
+            };
+          });
+        }
+
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        
+        const validation = await validateDocument(pdf, file.name);
+        
+        setFileValidationResults(prev => ({
+          ...prev,
+          [file.name]: validation
+        }));
+
+        setFileProgress(prev => ({
+          ...prev,
+          [file.name]: {
+            ...prev[file.name],
+            status: validation.isValid ? 'validated' : 'validation_failed',
+            progress: validation.isValid ? 25 : 0
+          }
+        }));
+
+        if (validation.isValid) {
+          addLog(`✅ ${file.name}: Document validation successful`, 'success');
+        } else {
+          addLog(`❌ ${file.name}: ${validation.message}`, 'error');
+        }
+
+      } else {
+        // Basic validation for non-PDF files
+        const validation = {
+          isValid: true,
+          type: 'text_file',
+          message: 'Text file accepted',
+          suggestion: 'Text file will be processed directly.',
+          confidence: 'medium'
+        };
+
+        setFileValidationResults(prev => ({
+          ...prev,
+          [file.name]: validation
+        }));
+
+        setFileProgress(prev => ({
+          ...prev,
+          [file.name]: {
+            ...prev[file.name],
+            status: 'validated',
+            progress: 25
+          }
+        }));
+
+        addLog(`✅ ${file.name}: Text file accepted`, 'success');
+      }
+    } catch (error) {
+      const validation = {
+        isValid: false,
+        type: 'error',
+        message: `Validation failed: ${error.message}`,
+        suggestion: 'Please try uploading the file again.'
+      };
+
+      setFileValidationResults(prev => ({
+        ...prev,
+        [file.name]: validation
+      }));
+
+      setFileProgress(prev => ({
+        ...prev,
+        [file.name]: {
+          ...prev[file.name],
+          status: 'validation_failed',
+          progress: 0
+        }
+      }));
+
+      addLog(`❌ ${file.name}: Validation failed - ${error.message}`, 'error');
+    }
   };
 
   const removeFile = (indexToRemove) => {
+    const fileToRemove = files[indexToRemove];
     const updatedFiles = files.filter((_, index) => index !== indexToRemove);
     setFiles(updatedFiles);
     
     // Update progress tracking
     const updatedProgress = { ...fileProgress };
-    delete updatedProgress[files[indexToRemove].name];
+    delete updatedProgress[fileToRemove.name];
     setFileProgress(updatedProgress);
+
+    // Update validation results
+    const updatedValidation = { ...fileValidationResults };
+    delete updatedValidation[fileToRemove.name];
+    setFileValidationResults(updatedValidation);
     
-    addLog(`Removed ${files[indexToRemove].name}`, 'info');
+    addLog(`Removed ${fileToRemove.name}`, 'info');
   };
 
   const updateFileProgress = (fileName, updates) => {
@@ -144,7 +416,7 @@ const BankStatementProcessor = () => {
     }));
   };
 
-  // Enhanced PDF text extraction (keeping original logic intact)
+  // Enhanced PDF text extraction with validation integration
   const extractTextFromPDF = async (file) => {
     try {
       addLog(`Reading PDF: ${file.name}...`, 'info');
@@ -191,7 +463,6 @@ const BankStatementProcessor = () => {
       if (meaningfulLines < 20) {
         addLog('Low text content detected - applying text enhancement...', 'info');
         
-        // Enhanced text cleaning for better extraction
         fullText = fullText
           .replace(/\s+/g, ' ')
           .replace(/[^\x20-\x7E\n\r]/g, '')
@@ -209,27 +480,32 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Process single file with progress tracking
+  // Process single file with enhanced validation
   const processSingleFile = async (file) => {
     const fileName = file.name;
     
     try {
-      updateFileProgress(fileName, { status: 'processing', progress: 10 });
+      const validation = fileValidationResults[fileName];
+      if (!validation?.isValid) {
+        throw new Error(`Document validation failed: ${validation?.message || 'Unknown validation error'}`);
+      }
+
+      updateFileProgress(fileName, { status: 'processing', progress: 30 });
       addLog(`Starting ${fileName}...`, 'info');
 
       let extractedText = '';
       
       if (file.type === 'application/pdf') {
-        updateFileProgress(fileName, { status: 'extracting', progress: 30 });
+        updateFileProgress(fileName, { status: 'extracting', progress: 50 });
         extractedText = await extractTextFromPDF(file);
       } else {
-        updateFileProgress(fileName, { status: 'reading', progress: 30 });
+        updateFileProgress(fileName, { status: 'reading', progress: 50 });
         extractedText = await file.text();
         addLog(`Text file processed: ${fileName}`, 'success');
       }
 
       if (extractedText) {
-        updateFileProgress(fileName, { status: 'analyzing', progress: 60 });
+        updateFileProgress(fileName, { status: 'analyzing', progress: 75 });
         const transactions = extractTransactionsFromText(extractedText, fileName);
         
         updateFileProgress(fileName, { 
@@ -270,6 +546,7 @@ const BankStatementProcessor = () => {
       };
     }
   };
+
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
     
@@ -281,10 +558,7 @@ const BankStatementProcessor = () => {
     addLog(`Opening Balance: MUR ${openingBalance.toLocaleString()}`, 'success');
     addLog(`Closing Balance: MUR ${closingBalance.toLocaleString()}`, 'success');
     
-      // Enhanced patterns for MCB statements
     const mcbPattern1 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
-    
-    // Pattern 2: Alternative format with negative amounts: DD/MM/YYYY DD/MM/YYYY -AMOUNT BALANCE DESCRIPTION
     const mcbPattern2 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+(-?[\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
     
     addLog(`Searching for MCB transaction patterns...`, 'info');
@@ -292,7 +566,6 @@ const BankStatementProcessor = () => {
     let transactionCount = 0;
     const patterns = [mcbPattern1, mcbPattern2];
     
-    // Try each pattern
     for (let patternIndex = 0; patternIndex < patterns.length; patternIndex++) {
       const pattern = patterns[patternIndex];
       let match;
@@ -302,12 +575,10 @@ const BankStatementProcessor = () => {
       while ((match = pattern.exec(text)) !== null) {
         const [fullMatch, transDate, valueDate, amount, balance, description] = match;
         
-        // Clean up the extracted data
         const cleanDescription = description.trim().replace(/\s+/g, ' ').replace(/[\r\n]/g, '');
         const transactionAmount = parseFloat(amount.replace(/,/g, ''));
         const balanceAmount = parseFloat(balance.replace(/,/g, ''));
         
-        // Validation checks
         if (cleanDescription.toLowerCase().includes('trans date') ||
             cleanDescription.toLowerCase().includes('statement page') ||
             cleanDescription.toLowerCase().includes('account number') ||
@@ -318,7 +589,6 @@ const BankStatementProcessor = () => {
           continue;
         }
         
-        // Check for duplicate transactions
         const isDuplicate = transactions.some(t => 
           t.transactionDate === transDate && 
           t.description === cleanDescription && 
@@ -334,11 +604,11 @@ const BankStatementProcessor = () => {
           transactionDate: transDate,
           valueDate: valueDate,
           description: cleanDescription,
-          amount: Math.abs(transactionAmount), // Always use absolute value
+          amount: Math.abs(transactionAmount),
           balance: Math.abs(balanceAmount),
           sourceFile: fileName,
           originalLine: fullMatch.trim(),
-          rawAmount: amount, // Keep original for debugging
+          rawAmount: amount,
           isDebit: transactionAmount < 0 || amount.includes('-')
         });
         
@@ -346,14 +616,12 @@ const BankStatementProcessor = () => {
         addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${transactionAmount < 0 ? '(Debit)' : '(Credit)'}`, 'success');
       }
       
-      // If we found transactions with this pattern, don't try others
       if (transactionCount > 0) {
         addLog(`Pattern ${patternIndex + 1} successful - ${transactionCount} transactions found`, 'success');
         break;
       }
     }
     
-    // Line-by-line fallback (keeping original logic)
     if (transactionCount === 0) {
       addLog(`No regex patterns worked, trying line-by-line parsing...`, 'info');
       
@@ -410,7 +678,6 @@ const BankStatementProcessor = () => {
     return validTransactions;
   };
 
-  // Keep original balance extraction functions intact
   const extractOpeningBalance = (text) => {
     const patterns = [
       /(?:opening|beginning)\s+balance[:\s]+(?:MUR\s+)?([\d,]+\.?\d*)/i,
@@ -471,36 +738,31 @@ const BankStatementProcessor = () => {
     return 0;
   };
 
-  // Enhanced categorization with fuzzy matching
   const categorizeTransaction = (description) => {
     const desc = description.toLowerCase();
     
-    // Direct keyword matching (keep original logic)
     for (const [keyword, category] of Object.entries(mappingRules)) {
       if (desc.includes(keyword.toLowerCase())) {
         return { category, matched: true, keyword, confidence: 'high' };
       }
     }
     
-    // Enhanced fuzzy matching for partial matches
     const fuzzyMatches = [];
     
     for (const [keyword, category] of Object.entries(mappingRules)) {
       const keywordLower = keyword.toLowerCase();
       const words = keywordLower.split(' ');
       
-      // Check if any words from the keyword appear in description
       const matchingWords = words.filter(word => desc.includes(word));
       
       if (matchingWords.length > 0) {
         const confidence = matchingWords.length / words.length;
-        if (confidence >= 0.6) { // 60% of words must match
+        if (confidence >= 0.6) {
           fuzzyMatches.push({ category, keyword, confidence });
         }
       }
     }
     
-    // Return best fuzzy match if any
     if (fuzzyMatches.length > 0) {
       const bestMatch = fuzzyMatches.reduce((best, current) => 
         current.confidence > best.confidence ? current : best
@@ -516,36 +778,45 @@ const BankStatementProcessor = () => {
     return { category: 'UNCATEGORIZED', matched: false, keyword: null, confidence: 'none' };
   };
 
-  // Enhanced parallel processing
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('Please upload files first', 'error');
       return;
     }
 
+    const validFiles = files.filter(file => fileValidationResults[file.name]?.isValid);
+    const invalidFiles = files.filter(file => !fileValidationResults[file.name]?.isValid);
+
+    if (validFiles.length === 0) {
+      addLog('No valid files to process. Please upload valid bank statement documents.', 'error');
+      return;
+    }
+
+    if (invalidFiles.length > 0) {
+      addLog(`Warning: ${invalidFiles.length} file(s) will be skipped due to validation failures`, 'error');
+    }
+
     setProcessing(true);
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
-    setProcessingStats({ completed: 0, total: files.length, failed: 0 });
+    setProcessingStats({ completed: 0, total: validFiles.length, failed: 0 });
     
-    addLog(`Starting parallel processing of ${files.length} files...`, 'info');
+    addLog(`Starting parallel processing of ${validFiles.length} validated files...`, 'info');
 
     try {
-      // Process files in parallel with concurrency limit
-      const concurrencyLimit = 3; // Process max 3 files simultaneously
+      const concurrencyLimit = 3;
       const results = [];
       
-      for (let i = 0; i < files.length; i += concurrencyLimit) {
-        const batch = files.slice(i, i + concurrencyLimit);
+      for (let i = 0; i < validFiles.length; i += concurrencyLimit) {
+        const batch = validFiles.slice(i, i + concurrencyLimit);
         const batchPromises = batch.map(file => processSingleFile(file));
         
-        addLog(`Processing batch ${Math.floor(i/concurrencyLimit) + 1}/${Math.ceil(files.length/concurrencyLimit)}...`, 'info');
+        addLog(`Processing batch ${Math.floor(i/concurrencyLimit) + 1}/${Math.ceil(validFiles.length/concurrencyLimit)}...`, 'info');
         
         const batchResults = await Promise.all(batchPromises);
         results.push(...batchResults);
         
-        // Update overall progress
         setProcessingStats(prev => ({
           ...prev,
           completed: results.length,
@@ -553,7 +824,6 @@ const BankStatementProcessor = () => {
         }));
       }
 
-      // Combine all results
       const allTransactions = [];
       const stats = {};
       const balanceInfo = {};
@@ -589,7 +859,6 @@ const BankStatementProcessor = () => {
 
       setFileStats({...stats, balanceInfo});
 
-      // Process categorization
       const categorizedData = {
         'SALES': [],
         'Salary': [],
@@ -640,7 +909,7 @@ const BankStatementProcessor = () => {
       const overallClosingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.closingBalance, 0);
       
       addLog(`Parallel processing complete!`, 'success');
-      addLog(`Files: ${files.length - totalFailed}/${files.length} successful`, totalFailed > 0 ? 'error' : 'success');
+      addLog(`Files: ${validFiles.length - totalFailed}/${validFiles.length} successful`, totalFailed > 0 ? 'error' : 'success');
       addLog(`Total: ${totalProcessed}, Categorized: ${totalCategorized}, Uncategorized: ${uncategorized.length}`, 'success');
       addLog(`Success Rate: ${successRate}%`, 'success');
       addLog(`Overall Opening Balance: MUR ${overallOpeningBalance.toLocaleString()}`, 'success');
@@ -654,7 +923,6 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Enhanced Excel generation with better formatting
   const generateExcel = () => {
     if (!results) {
       addLog('No results to download', 'error');
@@ -679,9 +947,8 @@ const BankStatementProcessor = () => {
       const wb = XLSX.utils.book_new();
       const timestamp = new Date().toLocaleString();
       
-      // Enhanced Summary Report
       const summaryData = [
-        ['ENHANCED BANK STATEMENT PROCESSING REPORT'],
+        ['ENHANCED BANK STATEMENT PROCESSING REPORT - WITH DOCUMENT VALIDATION'],
         ['Generated:', timestamp],
         ['Files Processed:', Object.keys(fileStats).filter(k => k !== 'balanceInfo').length],
         [''],
@@ -712,7 +979,6 @@ const BankStatementProcessor = () => {
       const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
       XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
       
-      // All Transactions Sheet (keep original format)
       const transactionData = [
         ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status', 'Confidence']
       ];
@@ -755,7 +1021,6 @@ const BankStatementProcessor = () => {
       
       XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
       
-      // Category Analysis Sheet
       const categoryData = [
         ['CATEGORY ANALYSIS'],
         ['Category', 'Transaction Count', 'Total Amount (MUR)', 'Average Amount', 'Min Amount', 'Max Amount']
@@ -783,7 +1048,6 @@ const BankStatementProcessor = () => {
       const categoryWS = XLSX.utils.aoa_to_sheet(categoryData);
       XLSX.utils.book_append_sheet(wb, categoryWS, "Category Analysis");
       
-      // Uncategorized Items Sheet (if any)
       if (uncategorizedData.length > 0) {
         const uncategorizedSheetData = [
           ['Date', 'Description', 'Amount (MUR)', 'Source File', 'Suggested Category', 'Manual Category']
@@ -795,8 +1059,8 @@ const BankStatementProcessor = () => {
             transaction.description,
             transaction.amount,
             transaction.sourceFile,
-            '', // For AI suggestions in future
-            '' // Empty column for manual categorization
+            '',
+            ''
           ]);
         });
         
@@ -820,11 +1084,10 @@ const BankStatementProcessor = () => {
       document.body.removeChild(a);
       
       URL.revokeObjectURL(url);
-      addLog('Enhanced Excel report with category analysis downloaded!', 'success');
+      addLog('Enhanced Excel report with document validation details downloaded!', 'success');
     });
   };
 
-  // Keep original balance stats calculation
   const getBalanceStats = () => {
     if (!results || !fileStats.balanceInfo) return { 
       totalTransactions: 0, 
@@ -862,8 +1125,23 @@ const BankStatementProcessor = () => {
     };
   };
 
+  const canProcess = () => {
+    const validFiles = files.filter(file => fileValidationResults[file.name]?.isValid);
+    return validFiles.length > 0;
+  };
+
+  const getValidationSummary = () => {
+    const total = files.length;
+    const valid = files.filter(file => fileValidationResults[file.name]?.isValid).length;
+    const invalid = total - valid;
+    const pending = files.filter(file => !fileValidationResults[file.name] || fileValidationResults[file.name].type === 'pending').length;
+    
+    return { total, valid, invalid, pending };
+  };
+
   const { totalTransactions, openingBalance, closingBalance, categories, categorizedCount, uncategorizedCount } = getBalanceStats();
   const successRate = totalTransactions > 0 ? ((categorizedCount / totalTransactions) * 100).toFixed(1) : 0;
+  const validationSummary = getValidationSummary();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -872,13 +1150,13 @@ const BankStatementProcessor = () => {
         {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-lg mb-4">
-            <FileText className="h-8 w-8 text-white" />
+            <Shield className="h-8 w-8 text-white" />
           </div>
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
-            Enhanced Bank Statement Processor
+            Smart Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with improved pattern matching and categorization
+            Advanced PDF processing with intelligent document validation and pattern recognition
           </p>
         </div>
 
@@ -935,7 +1213,7 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Upload Section */}
+        {/* Upload Section with Validation */}
         <div className="bg-white rounded-xl shadow-sm border p-8 mb-6">
           <div className="text-center">
             <Upload className="mx-auto h-16 w-16 text-blue-500 mb-4" />
@@ -943,8 +1221,21 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF and text files supported - Enhanced pattern recognition for MCB statements
+              PDF and text files supported - Intelligent validation ensures document quality
             </p>
+            
+            {/* Document Validation Info */}
+            <div className="bg-blue-50 rounded-lg p-4 mb-6">
+              <div className="flex items-center justify-center mb-3">
+                <Shield className="h-5 w-5 text-blue-600 mr-2" />
+                <span className="text-blue-800 font-medium">Smart Document Validation</span>
+              </div>
+              <div className="text-sm text-blue-700 space-y-1">
+                <div>• Detects scanned vs digital documents</div>
+                <div>• Validates banking content and format</div>
+                <div>• Ensures optimal processing quality</div>
+              </div>
+            </div>
             
             {/* Toggle for combining PDFs */}
             <div className="mb-6">
@@ -983,10 +1274,29 @@ const BankStatementProcessor = () => {
             
             {files.length > 0 && (
               <div className="mt-6">
-                <div className="bg-blue-50 rounded-lg p-4">
-                  <p className="text-blue-800 font-medium mb-3">
-                    {files.length} files selected
-                  </p>
+                {/* Validation Summary */}
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-gray-800 font-medium">
+                      Document Validation Summary
+                    </span>
+                    <div className="flex items-center space-x-4 text-sm">
+                      <div className="flex items-center">
+                        <CheckCircle className="h-4 w-4 text-green-500 mr-1" />
+                        <span className="text-green-700">{validationSummary.valid} Valid</span>
+                      </div>
+                      <div className="flex items-center">
+                        <AlertTriangle className="h-4 w-4 text-red-500 mr-1" />
+                        <span className="text-red-700">{validationSummary.invalid} Invalid</span>
+                      </div>
+                      {validationSummary.pending > 0 && (
+                        <div className="flex items-center">
+                          <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mr-1" />
+                          <span className="text-blue-700">{validationSummary.pending} Validating</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   
                   {/* Overall Progress Bar */}
                   {processing && (
@@ -1008,84 +1318,129 @@ const BankStatementProcessor = () => {
                       </div>
                     </div>
                   )}
+                </div>
                   
-                  <div className="max-h-64 overflow-y-auto">
-                    <div className="grid grid-cols-1 gap-3">
-                      {files.map((file, index) => {
-                        const progress = fileProgress[file.name] || { status: 'pending', progress: 0, transactions: 0 };
-                        return (
-                          <div key={index} className="flex items-center bg-white rounded p-3 border">
-                            {/* File Icon and Info */}
-                            <div className="flex items-center flex-1 min-w-0">
-                              <FileText className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between">
-                                  <span className="truncate text-gray-700 text-sm font-medium">{file.name}</span>
-                                  <span className="ml-2 text-gray-400 text-xs flex-shrink-0">
+                <div className="max-h-64 overflow-y-auto">
+                  <div className="grid grid-cols-1 gap-3">
+                    {files.map((file, index) => {
+                      const progress = fileProgress[file.name] || { status: 'pending', progress: 0, transactions: 0 };
+                      const validation = fileValidationResults[file.name] || { isValid: null, type: 'pending', message: 'Validating...' };
+                      
+                      return (
+                        <div key={index} className={`flex items-center rounded-lg p-3 border transition-all duration-300 ${
+                          validation.isValid === true ? 'bg-green-50 border-green-200' :
+                          validation.isValid === false ? 'bg-red-50 border-red-200' :
+                          'bg-gray-50 border-gray-200'
+                        }`}>
+                          {/* File Icon and Info */}
+                          <div className="flex items-center flex-1 min-w-0">
+                            <div className={`p-2 rounded-lg mr-3 ${
+                              validation.isValid === true ? 'bg-green-100' :
+                              validation.isValid === false ? 'bg-red-100' :
+                              'bg-gray-100'
+                            }`}>
+                              <FileText className={`h-4 w-4 ${
+                                validation.isValid === true ? 'text-green-600' :
+                                validation.isValid === false ? 'text-red-600' :
+                                'text-gray-400'
+                              }`} />
+                            </div>
+                            
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="truncate text-gray-700 text-sm font-medium">{file.name}</span>
+                                <div className="ml-2 flex items-center space-x-2">
+                                  <span className="text-gray-400 text-xs flex-shrink-0">
                                     {(file.size / 1024).toFixed(1)}KB
                                   </span>
+                                  
+                                  {/* Validation Status Badge */}
+                                  {validation.isValid === true && (
+                                    <div className="flex items-center bg-green-100 text-green-800 px-2 py-1 rounded text-xs">
+                                      <ThumbsUp className="h-3 w-3 mr-1" />
+                                      Valid
+                                    </div>
+                                  )}
+                                  {validation.isValid === false && (
+                                    <div className="flex items-center bg-red-100 text-red-800 px-2 py-1 rounded text-xs">
+                                      <AlertTriangle className="h-3 w-3 mr-1" />
+                                      {validation.type === 'scanned' ? 'Scanned' : 
+                                       validation.type === 'wrong_document' ? 'Wrong Doc' : 'Invalid'}
+                                    </div>
+                                  )}
+                                  {validation.isValid === null && (
+                                    <div className="flex items-center bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">
+                                      <div className="h-2 w-2 bg-blue-600 rounded-full animate-pulse mr-1" />
+                                      Checking...
+                                    </div>
+                                  )}
                                 </div>
-                                
-                                {/* Progress Bar for Individual File */}
-                                {processing && progress.status !== 'pending' && (
-                                  <div className="mt-2">
-                                    <div className="flex justify-between items-center mb-1">
-                                      <span className="text-xs text-gray-600 capitalize">
-                                        {progress.status === 'completed' && progress.transactions > 0 ? 
-                                          `${progress.transactions} transactions` : 
-                                          progress.status
-                                        }
-                                      </span>
-                                      <span className="text-xs text-gray-500">
-                                        {progress.progress}%
-                                      </span>
-                                    </div>
-                                    <div className="w-full bg-gray-200 rounded-full h-1.5">
-                                      <div 
-                                        className={`h-1.5 rounded-full transition-all duration-300 ${
-                                          progress.status === 'completed' ? 'bg-green-500' :
-                                          progress.status === 'failed' ? 'bg-red-500' :
-                                          'bg-blue-500'
-                                        }`}
-                                        style={{
-                                          width: `${progress.progress}%`
-                                        }}
-                                      />
-                                    </div>
-                                  </div>
-                                )}
-                                
-                                {/* Error Message */}
-                                {progress.status === 'failed' && progress.error && (
-                                  <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
-                                    {progress.error}
-                                  </div>
-                                )}
                               </div>
-                            </div>
-                            
-                            {/* Remove Button */}
-                            {!processing && (
-                              <button
-                                onClick={() => removeFile(index)}
-                                className="ml-2 text-red-400 hover:text-red-600 p-1"
-                                title="Remove file"
-                              >
-                                ✕
-                              </button>
-                            )}
-                            
-                            {/* Status Indicator */}
-                            <div className="ml-2 flex-shrink-0">
-                              {progress.status === 'completed' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                              {progress.status === 'failed' && <AlertCircle className="h-4 w-4 text-red-500" />}
-                              {progress.status === 'processing' && <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
-                              {progress.status === 'pending' && <div className="h-4 w-4 bg-gray-300 rounded-full" />}
+                              
+                              {/* Validation Message */}
+                              <div className="mt-1 text-xs text-gray-600">
+                                {validation.message}
+                              </div>
+                              
+                              {/* Progress Bar for Individual File */}
+                              {processing && progress.status !== 'pending' && validation.isValid && (
+                                <div className="mt-2">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs text-gray-600 capitalize">
+                                      {progress.status === 'completed' && progress.transactions > 0 ? 
+                                        `${progress.transactions} transactions` : 
+                                        progress.status
+                                      }
+                                    </span>
+                                    <span className="text-xs text-gray-500">
+                                      {progress.progress}%
+                                    </span>
+                                  </div>
+                                  <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                    <div 
+                                      className={`h-1.5 rounded-full transition-all duration-300 ${
+                                        progress.status === 'completed' ? 'bg-green-500' :
+                                        progress.status === 'failed' ? 'bg-red-500' :
+                                        'bg-blue-500'
+                                      }`}
+                                      style={{
+                                        width: `${progress.progress}%`
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {/* Validation Details (for failed validation) */}
+                              {validation.isValid === false && validation.suggestion && (
+                                <div className="mt-2 p-2 bg-white border border-red-200 rounded text-xs">
+                                  <div className="text-red-700 font-medium mb-1">Suggestion:</div>
+                                  <div className="text-red-600">{validation.suggestion}</div>
+                                </div>
+                              )}
+                              
+                              {/* Processing Error Message */}
+                              {progress.status === 'failed' && progress.error && (
+                                <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+                                  {progress.error}
+                                </div>
+                              )}
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+                          
+                          {/* Remove Button */}
+                          {!processing && (
+                            <button
+                              onClick={() => removeFile(index)}
+                              className="ml-2 p-1 text-gray-400 hover:text-red-600 rounded transition-colors"
+                              title="Remove file"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -1097,9 +1452,9 @@ const BankStatementProcessor = () => {
         <div className="text-center mb-6">
           <button
             onClick={processFiles}
-            disabled={processing || files.length === 0}
+            disabled={processing || !canProcess()}
             className={`px-8 py-4 rounded-lg font-medium text-lg transition-all inline-flex items-center ${
-              processing || files.length === 0
+              processing || !canProcess()
                 ? 'bg-gray-400 cursor-not-allowed'
                 : 'bg-green-600 hover:bg-green-700'
             } text-white`}
@@ -1108,12 +1463,25 @@ const BankStatementProcessor = () => {
             {processing ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                Processing with Enhanced Intelligence...
+                Processing Validated Files...
               </>
             ) : (
-              `Process ${files.length} Statement${files.length !== 1 ? 's' : ''}`
+              `Process ${validationSummary.valid} Valid File${validationSummary.valid !== 1 ? 's' : ''}`
             )}
           </button>
+          
+          {files.length > 0 && !canProcess() && (
+            <p className="text-sm text-red-600 mt-2">
+              No valid files to process. Please upload valid bank statement documents.
+            </p>
+          )}
+          
+          {canProcess() && !processing && (
+            <p className="text-sm text-gray-500 mt-2">
+              Ready to process {validationSummary.valid} validated file{validationSummary.valid !== 1 ? 's' : ''} • 
+              {validationSummary.invalid > 0 && `${validationSummary.invalid} invalid file${validationSummary.invalid !== 1 ? 's' : ''} will be skipped`}
+            </p>
+          )}
         </div>
 
         {/* Processing Logs */}
@@ -1145,11 +1513,11 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Results Section - Keep original structure */}
+        {/* Results Section */}
         {results && (
           <div className="space-y-6">
             
-            {/* File Processing Stats - Enhanced */}
+            {/* File Processing Stats */}
             {Object.keys(fileStats).length > 0 && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
                 <h3 className="text-xl font-medium text-gray-800 mb-4">File Processing Statistics</h3>
@@ -1240,7 +1608,7 @@ const BankStatementProcessor = () => {
               </div>
             </div>
 
-            {/* Keep original uncategorized section */}
+            {/* Uncategorized Transactions */}
             {uncategorizedData.length > 0 && (
               <div className="bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-6">
                 <div className="flex items-start">
@@ -1294,6 +1662,15 @@ const BankStatementProcessor = () => {
           <h3 className="text-lg font-medium text-green-800 mb-4">Enhanced System Features</h3>
           <div className="grid md:grid-cols-3 gap-6">
             <div>
+              <h4 className="font-medium text-green-700 mb-2">Smart Document Validation</h4>
+              <ul className="text-sm text-green-600 space-y-1">
+                <li>• Detects scanned vs digital PDFs</li>
+                <li>• Validates banking content automatically</li>
+                <li>• User-friendly feedback with thumbs up</li>
+                <li>• Prevents processing of invalid documents</li>
+              </ul>
+            </div>
+            <div>
               <h4 className="font-medium text-green-700 mb-2">Improved Pattern Recognition</h4>
               <ul className="text-sm text-green-600 space-y-1">
                 <li>• Enhanced MCB statement parsing</li>
@@ -1303,20 +1680,11 @@ const BankStatementProcessor = () => {
               </ul>
             </div>
             <div>
-              <h4 className="font-medium text-green-700 mb-2">Advanced Categorization</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Expanded mapping rules</li>
-                <li>• Confidence scoring</li>
-                <li>• Multi-word keyword matching</li>
-                <li>• Enhanced validation checks</li>
-              </ul>
-            </div>
-            <div>
               <h4 className="font-medium text-green-700 mb-2">Professional Reporting</h4>
               <ul className="text-sm text-green-600 space-y-1">
                 <li>• Category analysis sheet</li>
                 <li>• Statistical summaries</li>
-                <li>• Confidence indicators</li>
+                <li>• Validation status tracking</li>
                 <li>• Better Excel formatting</li>
               </ul>
             </div>
@@ -1326,7 +1694,7 @@ const BankStatementProcessor = () => {
         {/* Footer */}
         <div className="text-center mt-8 py-6 border-t">
           <p className="text-gray-600 text-sm">
-            Enhanced Bank Statement Processor v7.0 - Improved Pattern Recognition & Categorization
+            Smart Bank Statement Processor v8.0 - With Intelligent Document Validation & User-Friendly Feedback
           </p>
         </div>
       </div>
