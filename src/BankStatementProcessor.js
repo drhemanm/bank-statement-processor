@@ -1,7 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
-import Tesseract from 'tesseract.js';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
@@ -51,163 +50,94 @@ const BankStatementProcessor = () => {
     addLog(`${uploadedFiles.length} file(s) uploaded successfully`, 'success');
   };
 
-  // Convert PDF page to image for OCR
-  const pdfPageToImage = async (page) => {
-    const viewport = page.getViewport({ scale: 2.0 });
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
-
-    const renderContext = {
-      canvasContext: context,
-      viewport: viewport
-    };
-
-    await page.render(renderContext).promise;
-    return canvas.toDataURL('image/png');
-  };
-
-  // Enhanced PDF extraction with OCR fallback
+  // Enhanced PDF text extraction
   const extractTextFromPDF = async (file) => {
     try {
-      addLog(`📄 Reading PDF: ${file.name}...`, 'info');
+      addLog(`Reading PDF: ${file.name}...`, 'info');
       
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       
-      addLog(`📖 PDF loaded: ${pdf.numPages} pages found`, 'success');
+      addLog(`PDF loaded: ${pdf.numPages} pages found`, 'success');
       
       let fullText = '';
       
-      // First try regular text extraction
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
+        // Extract text items and join them with spaces
         const pageText = textContent.items
           .map(item => item.str)
           .join(' ');
         
         fullText += pageText + '\n';
-        addLog(`📄 Page ${pageNum} text extracted - ${pageText.length} chars`, 'info');
-      }
-      
-      // Check if we got meaningful text
-      const meaningfulLines = fullText.split('\n').filter(line => line.trim().length > 10).length;
-      addLog(`📊 Meaningful text lines found: ${meaningfulLines}`, 'info');
-      
-      // If very little text extracted, try OCR
-      if (meaningfulLines < 10) {
-        addLog(`🔍 Low text content detected - switching to OCR mode...`, 'info');
-        fullText = ''; // Reset
         
-        for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 3); pageNum++) { // Limit to first 3 pages for speed
-          const page = await pdf.getPage(pageNum);
-          
-          addLog(`🖼️ Converting page ${pageNum} to image for OCR...`, 'info');
-          const imageData = await pdfPageToImage(page);
-          
-          addLog(`🤖 Running OCR on page ${pageNum}...`, 'info');
-          const { data: { text } } = await Tesseract.recognize(imageData, 'eng', {
-            logger: (m) => {
-              if (m.status === 'recognizing text') {
-                addLog(`OCR Progress: ${Math.round(m.progress * 100)}%`, 'info');
-              }
-            }
-          });
-          
-          fullText += text + '\n';
-          addLog(`✅ OCR completed for page ${pageNum} - ${text.length} chars extracted`, 'success');
-        }
+        addLog(`Page ${pageNum} processed - ${pageText.length} characters`, 'info');
       }
       
-      // Show sample of extracted text
-      const preview = fullText.substring(0, 500).replace(/\s+/g, ' ').trim();
-      addLog(`📝 Text sample: "${preview}..."`, 'info');
-      
-      addLog(`✅ Text extraction complete - ${fullText.length} total characters`, 'success');
+      addLog(`PDF text extraction complete - ${fullText.length} total characters`, 'success');
       return fullText;
       
     } catch (error) {
-      addLog(`❌ PDF processing failed: ${error.message}`, 'error');
+      addLog(`PDF extraction failed for ${file.name}: ${error.message}`, 'error');
       throw error;
     }
   };
 
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
-    const lines = text.split('\n');
     
-    addLog(`🔍 Analyzing ${lines.length} lines from ${fileName}...`, 'info');
+    addLog(`Analyzing text from ${fileName}...`, 'info');
     
-    // Clean and filter lines
-    const cleanLines = lines
-      .map(line => line.trim())
-      .filter(line => line.length > 10);
+    // Split the text into potential transaction segments
+    // Look for patterns that indicate transaction boundaries
+    const segments = text.split(/(?=\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4})/g);
     
-    addLog(`📋 ${cleanLines.length} substantial lines to process`, 'info');
+    addLog(`Found ${segments.length} potential transaction segments`, 'info');
     
-    let dateLineCount = 0;
     let transactionCount = 0;
     
-    for (let line of cleanLines) {
-      // Skip obvious headers
-      if (line.includes('TRANS DATE') || 
-          line.includes('Opening Balance') ||
-          line.includes('Closing Balance') ||
-          line.includes('STATEMENT') ||
-          line.includes('UPLIFT MARKETING') ||
-          line.includes('Page :') ||
-          line.includes('For any change')) {
+    for (let segment of segments) {
+      segment = segment.trim();
+      
+      // Skip if too short or contains headers
+      if (segment.length < 50 || 
+          segment.includes('TRANS DATE') || 
+          segment.includes('Opening Balance') ||
+          segment.includes('Closing Balance') ||
+          segment.includes('STATEMENT Page')) {
         continue;
       }
       
-      // Look for date patterns (DD/MM/YYYY or DD/MM/YY)
-      const dateMatches = line.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/g);
-      if (dateMatches) {
-        dateLineCount++;
-        addLog(`📅 Date found: "${line.substring(0, 80)}..."`, 'info');
-      }
+      // Extract transaction pattern: DATE DATE DESCRIPTION AMOUNT BALANCE
+      const transactionPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)(?=\s|$)/g;
       
-      // Look for amount patterns
-      const numberMatches = line.match(/\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g);
-      
-      if (dateMatches && numberMatches && dateMatches.length >= 1 && numberMatches.length >= 1) {
-        // Try to parse transaction
-        const transDate = dateMatches[0];
-        const valueDate = dateMatches[1] || dateMatches[0];
+      let match;
+      while ((match = transactionPattern.exec(segment)) !== null) {
+        const [fullMatch, transDate, valueDate, description, amount, balance] = match;
         
-        // Find the transaction amount (usually the largest number that's not a balance)
-        const amounts = numberMatches.map(n => parseFloat(n.replace(/,/g, '')));
-        const amount = amounts.find(a => a > 0 && a < 1000000) || amounts[0]; // Reasonable transaction amount
-        const balance = amounts[amounts.length - 1]; // Last number is usually balance
+        const transactionAmount = parseFloat(amount.replace(/,/g, ''));
+        const balanceAmount = parseFloat(balance.replace(/,/g, ''));
         
-        // Extract description
-        let description = line;
-        description = description.replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, ''); // Remove dates
-        description = description.replace(/\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g, ''); // Remove numbers
-        description = description.replace(/\s+/g, ' ').trim(); // Clean whitespace
-        
-        // Only add if we have meaningful data
-        if (description.length > 3 && amount > 0 && !isNaN(amount)) {
+        if (transactionAmount > 0 && !isNaN(transactionAmount) && description.trim().length > 3) {
           transactions.push({
             transactionDate: transDate,
             valueDate: valueDate,
-            description: description,
-            amount: amount,
-            balance: balance,
+            description: description.trim(),
+            amount: transactionAmount,
+            balance: balanceAmount,
             sourceFile: fileName,
-            originalLine: line.substring(0, 100)
+            originalLine: fullMatch
           });
           
           transactionCount++;
-          addLog(`✅ Transaction ${transactionCount}: ${transDate} - ${description} - MUR ${amount}`, 'success');
+          addLog(`Transaction ${transactionCount}: ${transDate} - ${description.trim().substring(0, 40)}... - MUR ${transactionAmount}`, 'success');
         }
       }
     }
     
-    addLog(`📊 Summary: ${dateLineCount} date lines, ${transactionCount} valid transactions`, 'success');
+    addLog(`Total transactions extracted: ${transactionCount}`, 'success');
     return transactions;
   };
 
@@ -234,7 +164,7 @@ const BankStatementProcessor = () => {
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
-    addLog('🚀 Starting enhanced processing with OCR support...', 'info');
+    addLog('Starting enhanced processing...', 'info');
 
     try {
       const allTransactions = [];
@@ -242,7 +172,7 @@ const BankStatementProcessor = () => {
 
       // Process each file
       for (const file of files) {
-        addLog(`📄 Processing ${file.name}...`, 'info');
+        addLog(`Processing ${file.name}...`, 'info');
         
         let extractedText = '';
         
@@ -250,32 +180,15 @@ const BankStatementProcessor = () => {
           try {
             extractedText = await extractTextFromPDF(file);
           } catch (error) {
-            addLog(`❌ Could not process PDF ${file.name}: ${error.message}`, 'error');
-            continue;
-          }
-        } else if (file.type.startsWith('image/')) {
-          try {
-            addLog(`🖼️ Processing image ${file.name} with OCR...`, 'info');
-            const { data: { text } } = await Tesseract.recognize(file, 'eng', {
-              logger: (m) => {
-                if (m.status === 'recognizing text') {
-                  addLog(`OCR Progress: ${Math.round(m.progress * 100)}%`, 'info');
-                }
-              }
-            });
-            extractedText = text;
-            addLog(`✅ OCR completed for ${file.name}`, 'success');
-          } catch (error) {
-            addLog(`❌ OCR failed for ${file.name}: ${error.message}`, 'error');
+            addLog(`Could not process PDF ${file.name}: ${error.message}`, 'error');
             continue;
           }
         } else {
-          // For text files
           try {
             extractedText = await file.text();
-            addLog(`📝 Text file processed: ${file.name}`, 'success');
+            addLog(`Text file processed: ${file.name}`, 'success');
           } catch (error) {
-            addLog(`❌ Could not read ${file.name}: ${error.message}`, 'error');
+            addLog(`Could not read ${file.name}: ${error.message}`, 'error');
             continue;
           }
         }
@@ -291,7 +204,7 @@ const BankStatementProcessor = () => {
             uncategorized: 0
           };
           
-          addLog(`✅ Final: ${transactions.length} transactions from ${file.name}`, 'success');
+          addLog(`Final: ${transactions.length} transactions from ${file.name}`, 'success');
         }
       }
 
@@ -325,7 +238,7 @@ const BankStatementProcessor = () => {
             stats[transaction.sourceFile].categorized++;
           }
           
-          addLog(`✅ ${transaction.description.substring(0, 30)}... → ${category}`, 'success');
+          addLog(`${transaction.description.substring(0, 30)}... → ${category}`, 'success');
         } else {
           uncategorized.push({
             ...transaction,
@@ -337,7 +250,7 @@ const BankStatementProcessor = () => {
             stats[transaction.sourceFile].uncategorized++;
           }
           
-          addLog(`⚠️ Uncategorized: ${transaction.description.substring(0, 30)}...`, 'error');
+          addLog(`Uncategorized: ${transaction.description.substring(0, 30)}...`, 'error');
         }
       });
 
@@ -351,12 +264,12 @@ const BankStatementProcessor = () => {
       const totalProcessed = totalCategorized + uncategorized.length;
       const successRate = totalProcessed > 0 ? ((totalCategorized / totalProcessed) * 100).toFixed(1) : 0;
       
-      addLog(`🎉 Processing complete!`, 'success');
-      addLog(`📊 Total: ${totalProcessed}, Categorized: ${totalCategorized}, Uncategorized: ${uncategorized.length}`, 'success');
-      addLog(`📈 Success Rate: ${successRate}%`, 'success');
+      addLog(`Processing complete!`, 'success');
+      addLog(`Total: ${totalProcessed}, Categorized: ${totalCategorized}, Uncategorized: ${uncategorized.length}`, 'success');
+      addLog(`Success Rate: ${successRate}%`, 'success');
 
     } catch (error) {
-      addLog(`❌ Error: ${error.message}`, 'error');
+      addLog(`Error: ${error.message}`, 'error');
       console.error('Processing error:', error);
     } finally {
       setProcessing(false);
@@ -422,7 +335,7 @@ const BankStatementProcessor = () => {
     document.body.removeChild(a);
     
     URL.revokeObjectURL(url);
-    addLog('📋 Complete report downloaded!', 'success');
+    addLog('Complete report downloaded!', 'success');
   };
 
   // Calculate totals for display
@@ -456,10 +369,10 @@ const BankStatementProcessor = () => {
             <FileText className="h-8 w-8 text-white" />
           </div>
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
-            🏦 Bank Statement Processor
+            Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with OCR support for scanned documents
+            Advanced PDF processing with intelligent transaction extraction
           </p>
         </div>
 
@@ -493,14 +406,14 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF, images, and text files - now with OCR support for scanned documents!
+              PDF and text files supported - intelligent transaction detection
             </p>
             
             <input
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".pdf,.jpg,.jpeg,.png,.txt,.csv"
+              accept=".pdf,.txt,.csv"
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -517,7 +430,7 @@ const BankStatementProcessor = () => {
               <div className="mt-6">
                 <div className="bg-blue-50 rounded-lg p-4">
                   <p className="text-blue-800 font-medium mb-3">
-                    📁 {files.length} files selected
+                    {files.length} files selected
                   </p>
                   <div className="max-h-32 overflow-y-auto">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -553,7 +466,7 @@ const BankStatementProcessor = () => {
             {processing ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                Processing with OCR...
+                Processing...
               </>
             ) : (
               `Process ${files.length} Statement${files.length !== 1 ? 's' : ''}`
@@ -597,12 +510,12 @@ const BankStatementProcessor = () => {
             {/* File Processing Stats */}
             {Object.keys(fileStats).length > 0 && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
-                <h3 className="text-xl font-medium text-gray-800 mb-4">📊 File Processing Statistics</h3>
+                <h3 className="text-xl font-medium text-gray-800 mb-4">File Processing Statistics</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {Object.entries(fileStats).map(([fileName, stats]) => (
                     <div key={fileName} className="bg-gray-50 rounded-lg p-4">
                       <h4 className="font-medium text-gray-800 text-sm mb-2 truncate" title={fileName}>
-                        📄 {fileName}
+                        {fileName}
                       </h4>
                       <div className="space-y-1">
                         <div className="flex justify-between text-sm">
@@ -610,11 +523,11 @@ const BankStatementProcessor = () => {
                           <span className="font-medium">{stats.total}</span>
                         </div>
                         <div className="flex justify-between text-sm">
-                          <span className="text-green-600">✓ Categorized:</span>
+                          <span className="text-green-600">Categorized:</span>
                           <span className="font-medium text-green-600">{stats.categorized}</span>
                         </div>
                         <div className="flex justify-between text-sm">
-                          <span className="text-yellow-600">⚠ Need Review:</span>
+                          <span className="text-yellow-600">Need Review:</span>
                           <span className="font-medium text-yellow-600">{stats.uncategorized}</span>
                         </div>
                         <div className="flex justify-between text-sm border-t pt-1">
@@ -634,7 +547,7 @@ const BankStatementProcessor = () => {
             <div className="bg-white rounded-xl shadow-sm border p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-medium text-gray-800">
-                  📋 Categorized Transactions
+                  Categorized Transactions
                 </h3>
                 <button
                   onClick={generateExcel}
@@ -681,7 +594,7 @@ const BankStatementProcessor = () => {
                   <AlertCircle className="h-6 w-6 text-yellow-600 mr-3 mt-1" />
                   <div>
                     <h3 className="text-lg font-medium text-yellow-800 mb-2">
-                      ⚠️ {uncategorizedData.length} Transactions Need Manual Review
+                      {uncategorizedData.length} Transactions Need Manual Review
                     </h3>
                     <p className="text-yellow-700 mb-4">
                       These transactions couldn't be automatically categorized. They're included 
@@ -725,43 +638,33 @@ const BankStatementProcessor = () => {
 
         {/* Features & Instructions */}
         <div className="mt-8 bg-green-50 border rounded-xl p-6">
-          <h3 className="text-lg font-medium text-green-800 mb-4">🚀 Enhanced Features</h3>
+          <h3 className="text-lg font-medium text-green-800 mb-4">System Features</h3>
           <div className="grid md:grid-cols-2 gap-6">
             <div>
-              <h4 className="font-medium text-green-700 mb-2">🔍 Smart Processing</h4>
+              <h4 className="font-medium text-green-700 mb-2">Smart Processing</h4>
               <ul className="text-sm text-green-600 space-y-1">
-                <li>• OCR for scanned PDFs</li>
-                <li>• Text-based PDF extraction</li>
-                <li>• Image file processing</li>
+                <li>• Intelligent PDF text extraction</li>
+                <li>• Advanced transaction parsing</li>
+                <li>• Bulk file processing</li>
                 <li>• Real-time progress tracking</li>
               </ul>
             </div>
             <div>
-              <h4 className="font-medium text-green-700 mb-2">📊 Advanced Analysis</h4>
+              <h4 className="font-medium text-green-700 mb-2">Advanced Analysis</h4>
               <ul className="text-sm text-green-600 space-y-1">
-                <li>• Intelligent transaction detection</li>
                 <li>• Automatic categorization</li>
+                <li>• Uncategorized detection</li>
                 <li>• Comprehensive reporting</li>
-                <li>• Success rate tracking</li>
+                <li>• Success rate analytics</li>
               </ul>
             </div>
-          </div>
-          
-          <div className="mt-4 p-4 bg-white border rounded-lg">
-            <h4 className="font-medium text-green-800 mb-2">📋 How it Works:</h4>
-            <ol className="text-sm text-green-700 space-y-1 list-decimal list-inside">
-              <li>Upload your bank statements (PDF, images, or text files)</li>
-              <li>System automatically detects if OCR is needed for scanned documents</li>
-              <li>Watch real-time processing logs as text is extracted and analyzed</li>
-              <li>Review categorized results and download complete Excel report</li>
-            </ol>
           </div>
         </div>
 
         {/* Footer */}
         <div className="text-center mt-8 py-6 border-t">
           <p className="text-gray-600 text-sm">
-            🤖 Bank Statement Processor v3.0 - Now with OCR Support!
+            Bank Statement Processor v4.0 - Production Ready
           </p>
         </div>
       </div>
