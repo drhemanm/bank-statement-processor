@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign } from 'lucide-react';
+import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign, ThumbsUp, AlertTriangle, Shield, X } from 'lucide-react';
 
 const BankStatementProcessor = () => {
   const [files, setFiles] = useState([]);
@@ -9,13 +9,12 @@ const BankStatementProcessor = () => {
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
   const [combinePDFs, setCombinePDFs] = useState(false);
-  const [fileProgress, setFileProgress] = useState({}); // Track progress per file
+  const [fileProgress, setFileProgress] = useState({});
   const [processingStats, setProcessingStats] = useState({ completed: 0, total: 0, failed: 0 });
+  const [fileValidationResults, setFileValidationResults] = useState({});
   const fileInputRef = useRef(null);
 
-  // Enhanced mapping rules with more MCB-specific patterns
   const mappingRules = {
-    // Bank charges and fees
     'Business Banking Subs Fee': 'BANK CHARGES',
     'Standing order Charges': 'BANK CHARGES',
     'Account Maintenance Fee': 'BANK CHARGES',
@@ -26,16 +25,12 @@ const BankStatementProcessor = () => {
     'Overdraft Fee': 'BANK CHARGES',
     'Processing Fee': 'BANK CHARGES',
     'Commission': 'BANK CHARGES',
-
-    // Government and official payments
     'JUICE Account Transfer': 'SCHEME (PRIME)',
     'JuicePro Transfer': 'SCHEME (PRIME)',
     'Government Instant Payment': 'SCHEME (PRIME)',
     'MAUBANK': 'SCHEME (PRIME)',
     'SBM BANK': 'SCHEME (PRIME)',
     'MCB BANK': 'SCHEME (PRIME)',
-
-    // CSG and tax related
     'Direct Debit Scheme': 'CSG',
     'MAURITIUS REVENUE AUTHORITY': 'CSG',
     'MRA': 'CSG',
@@ -44,8 +39,6 @@ const BankStatementProcessor = () => {
     'NPF': 'CSG',
     'INCOME TAX': 'CSG',
     'VAT': 'CSG',
-
-    // Sales and deposits
     'ATM Cash Deposit': 'SALES',
     'Cash Deposit': 'SALES',
     'DEPOSIT': 'SALES',
@@ -53,8 +46,6 @@ const BankStatementProcessor = () => {
     'COLLECTION': 'SALES',
     'PAYMENT RECEIVED': 'SALES',
     'REMITTANCE': 'SALES',
-
-    // Salary payments
     'Cash Cheque': 'Salary',
     'Staff': 'Salary',
     'STAFF': 'Salary',
@@ -63,14 +54,10 @@ const BankStatementProcessor = () => {
     'WAGES': 'Salary',
     'BONUS': 'Salary',
     'ALLOWANCE': 'Salary',
-
-    // PRGF
     'Interbank Transfer': 'PRGF',
     'TRANSFER TO': 'PRGF',
     'TRANSFER FROM': 'PRGF',
     'FUND TRANSFER': 'PRGF',
-
-    // Miscellaneous
     'Merchant Instant Payment': 'MISCELLANEOUS',
     'Refill Amount': 'MISCELLANEOUS',
     'VAT on Refill': 'MISCELLANEOUS',
@@ -84,8 +71,6 @@ const BankStatementProcessor = () => {
     'CWA': 'MISCELLANEOUS',
     'WASTE WATER': 'MISCELLANEOUS',
     'INTERNET': 'MISCELLANEOUS',
-
-    // Transport
     'TAXI': 'Transport',
     'BUS': 'Transport',
     'FUEL': 'Transport',
@@ -100,7 +85,57 @@ const BankStatementProcessor = () => {
     setLogs(prev => [...prev, { message, type, timestamp }]);
   };
 
-  const handleFileUpload = (event) => {
+  const analyzeDocumentContent = (text, fileName, totalPages) => {
+    const textLength = text.length;
+    const meaningfulLines = text.split('\n').filter(line => 
+      line.trim().length > 5 && /[a-zA-Z]/.test(line) && /\d/.test(line)
+    ).length;
+
+    const bankingKeywords = [
+      'statement', 'account', 'balance', 'transaction', 'credit', 'debit',
+      'deposit', 'withdrawal', 'transfer', 'payment', 'bank', 'mcb',
+      'mauritius commercial bank', 'trans date', 'value date', 'opening balance'
+    ];
+
+    const bankingKeywordMatches = bankingKeywords.filter(keyword => 
+      text.toLowerCase().includes(keyword.toLowerCase())
+    ).length;
+    
+    const dateMatches = (text.match(/\d{2}\/\d{2}\/\d{4}/g) || []).length;
+    const currencyMatches = text.toLowerCase().includes('mur') ? 1 : 0;
+    const textDensity = textLength / totalPages;
+
+    addLog(`Analysis: ${bankingKeywordMatches} banking terms, ${dateMatches} dates, ${currencyMatches} currency, ${textDensity.toFixed(0)} chars/page`, 'info');
+
+    const strongBankingIndicators = bankingKeywordMatches >= 3 && dateMatches >= 3 && currencyMatches >= 1;
+    
+    if (strongBankingIndicators) {
+      return {
+        isValid: true,
+        type: 'valid_statement',
+        confidence: 'high',
+        message: 'Valid bank statement detected - Ready for processing!',
+        details: { bankingKeywords: bankingKeywordMatches, dates: dateMatches, currency: currencyMatches }
+      };
+    }
+
+    if (bankingKeywordMatches < 2 && dateMatches < 3 && currencyMatches === 0) {
+      return {
+        isValid: false,
+        type: 'wrong_document',
+        message: 'This does not appear to be a bank statement',
+        suggestion: 'Please upload a valid bank statement document with transaction data.'
+      };
+    }
+
+    return {
+      isValid: true,
+      type: 'valid_statement', 
+      confidence: 'medium',
+      message: 'Bank statement detected - Ready for processing!'
+    };
+  };
+  const handleFileUpload = async (event) => {
     const uploadedFiles = Array.from(event.target.files);
     setFiles(uploadedFiles);
     setLogs([]);
@@ -108,13 +143,13 @@ const BankStatementProcessor = () => {
     setUncategorizedData([]);
     setFileStats({});
     setFileProgress({});
+    setFileValidationResults({});
     setProcessingStats({ completed: 0, total: 0, failed: 0 });
     
-    // Initialize progress tracking for each file
     const initialProgress = {};
     uploadedFiles.forEach(file => {
       initialProgress[file.name] = {
-        status: 'pending',
+        status: 'validating',
         progress: 0,
         transactions: 0,
         error: null
@@ -122,19 +157,111 @@ const BankStatementProcessor = () => {
     });
     setFileProgress(initialProgress);
     
-    addLog(`${uploadedFiles.length} file(s) uploaded successfully`, 'success');
+    addLog(`${uploadedFiles.length} file(s) uploaded - starting validation...`, 'info');
+
+    for (const file of uploadedFiles) {
+      try {
+        if (file.type === 'application/pdf') {
+          addLog(`Validating PDF: ${file.name}`, 'info');
+          
+          if (!window.pdfjsLib) {
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+            document.head.appendChild(script);
+            
+            await new Promise((resolve) => {
+              script.onload = () => {
+                window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                resolve();
+              };
+            });
+          }
+          
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+          
+          let sampleText = '';
+          const pagesToCheck = Math.min(2, pdf.numPages);
+          
+          for (let pageNum = 1; pageNum <= pagesToCheck; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str).join(' ');
+            sampleText += pageText + '\n';
+          }
+          
+          const validation = analyzeDocumentContent(sampleText, file.name, pdf.numPages);
+          
+          setFileValidationResults(prev => ({
+            ...prev,
+            [file.name]: validation
+          }));
+
+          if (validation.isValid) {
+            addLog(`${file.name}: ${validation.message}`, 'success');
+            setFileProgress(prev => ({
+              ...prev,
+              [file.name]: { ...prev[file.name], status: 'validated', progress: 25 }
+            }));
+          } else {
+            addLog(`${file.name}: ${validation.message}`, 'error');
+            setFileProgress(prev => ({
+              ...prev,
+              [file.name]: { ...prev[file.name], status: 'validation_failed', progress: 0 }
+            }));
+          }
+        } else {
+          setFileValidationResults(prev => ({
+            ...prev,
+            [file.name]: { 
+              isValid: true, 
+              message: 'Text file ready for processing',
+              type: 'text_file'
+            }
+          }));
+          
+          setFileProgress(prev => ({
+            ...prev,
+            [file.name]: { ...prev[file.name], status: 'validated', progress: 25 }
+          }));
+          
+          addLog(`${file.name}: Text file validated successfully`, 'success');
+        }
+      } catch (error) {
+        addLog(`Validation error for ${file.name}: ${error.message}`, 'error');
+        
+        setFileValidationResults(prev => ({
+          ...prev,
+          [file.name]: { 
+            isValid: false, 
+            message: 'Validation failed', 
+            error: error.message,
+            type: 'error'
+          }
+        }));
+        
+        setFileProgress(prev => ({
+          ...prev,
+          [file.name]: { ...prev[file.name], status: 'validation_failed', progress: 0 }
+        }));
+      }
+    }
   };
 
   const removeFile = (indexToRemove) => {
+    const fileToRemove = files[indexToRemove];
     const updatedFiles = files.filter((_, index) => index !== indexToRemove);
     setFiles(updatedFiles);
     
-    // Update progress tracking
     const updatedProgress = { ...fileProgress };
-    delete updatedProgress[files[indexToRemove].name];
+    delete updatedProgress[fileToRemove.name];
     setFileProgress(updatedProgress);
     
-    addLog(`Removed ${files[indexToRemove].name}`, 'info');
+    const updatedValidation = { ...fileValidationResults };
+    delete updatedValidation[fileToRemove.name];
+    setFileValidationResults(updatedValidation);
+    
+    addLog(`Removed ${fileToRemove.name}`, 'info');
   };
 
   const updateFileProgress = (fileName, updates) => {
@@ -144,7 +271,6 @@ const BankStatementProcessor = () => {
     }));
   };
 
-  // Enhanced PDF text extraction (keeping original logic intact)
   const extractTextFromPDF = async (file) => {
     try {
       addLog(`Reading PDF: ${file.name}...`, 'info');
@@ -191,7 +317,6 @@ const BankStatementProcessor = () => {
       if (meaningfulLines < 20) {
         addLog('Low text content detected - applying text enhancement...', 'info');
         
-        // Enhanced text cleaning for better extraction
         fullText = fullText
           .replace(/\s+/g, ' ')
           .replace(/[^\x20-\x7E\n\r]/g, '')
@@ -208,28 +333,31 @@ const BankStatementProcessor = () => {
       throw error;
     }
   };
-
-  // Process single file with progress tracking
   const processSingleFile = async (file) => {
     const fileName = file.name;
     
     try {
-      updateFileProgress(fileName, { status: 'processing', progress: 10 });
+      const validation = fileValidationResults[fileName];
+      if (!validation?.isValid) {
+        throw new Error(`Document validation failed: ${validation?.message || 'Unknown validation error'}`);
+      }
+
+      updateFileProgress(fileName, { status: 'processing', progress: 30 });
       addLog(`Starting ${fileName}...`, 'info');
 
       let extractedText = '';
       
       if (file.type === 'application/pdf') {
-        updateFileProgress(fileName, { status: 'extracting', progress: 30 });
+        updateFileProgress(fileName, { status: 'extracting', progress: 50 });
         extractedText = await extractTextFromPDF(file);
       } else {
-        updateFileProgress(fileName, { status: 'reading', progress: 30 });
+        updateFileProgress(fileName, { status: 'reading', progress: 50 });
         extractedText = await file.text();
         addLog(`Text file processed: ${fileName}`, 'success');
       }
 
       if (extractedText) {
-        updateFileProgress(fileName, { status: 'analyzing', progress: 60 });
+        updateFileProgress(fileName, { status: 'analyzing', progress: 75 });
         const transactions = extractTransactionsFromText(extractedText, fileName);
         
         updateFileProgress(fileName, { 
@@ -238,7 +366,7 @@ const BankStatementProcessor = () => {
           transactions: transactions.length
         });
         
-        addLog(`✅ ${fileName}: ${transactions.length} transactions extracted`, 'success');
+        addLog(`${fileName}: ${transactions.length} transactions extracted`, 'success');
         
         return {
           fileName,
@@ -259,7 +387,7 @@ const BankStatementProcessor = () => {
         error: error.message
       });
       
-      addLog(`❌ ${fileName}: ${error.message}`, 'error');
+      addLog(`${fileName}: ${error.message}`, 'error');
       
       return {
         fileName,
@@ -270,6 +398,7 @@ const BankStatementProcessor = () => {
       };
     }
   };
+
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
     
@@ -281,10 +410,7 @@ const BankStatementProcessor = () => {
     addLog(`Opening Balance: MUR ${openingBalance.toLocaleString()}`, 'success');
     addLog(`Closing Balance: MUR ${closingBalance.toLocaleString()}`, 'success');
     
-      // Enhanced patterns for MCB statements
     const mcbPattern1 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
-    
-    // Pattern 2: Alternative format with negative amounts: DD/MM/YYYY DD/MM/YYYY -AMOUNT BALANCE DESCRIPTION
     const mcbPattern2 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+(-?[\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
     
     addLog(`Searching for MCB transaction patterns...`, 'info');
@@ -292,7 +418,6 @@ const BankStatementProcessor = () => {
     let transactionCount = 0;
     const patterns = [mcbPattern1, mcbPattern2];
     
-    // Try each pattern
     for (let patternIndex = 0; patternIndex < patterns.length; patternIndex++) {
       const pattern = patterns[patternIndex];
       let match;
@@ -302,12 +427,10 @@ const BankStatementProcessor = () => {
       while ((match = pattern.exec(text)) !== null) {
         const [fullMatch, transDate, valueDate, amount, balance, description] = match;
         
-        // Clean up the extracted data
         const cleanDescription = description.trim().replace(/\s+/g, ' ').replace(/[\r\n]/g, '');
         const transactionAmount = parseFloat(amount.replace(/,/g, ''));
         const balanceAmount = parseFloat(balance.replace(/,/g, ''));
         
-        // Validation checks
         if (cleanDescription.toLowerCase().includes('trans date') ||
             cleanDescription.toLowerCase().includes('statement page') ||
             cleanDescription.toLowerCase().includes('account number') ||
@@ -318,7 +441,6 @@ const BankStatementProcessor = () => {
           continue;
         }
         
-        // Check for duplicate transactions
         const isDuplicate = transactions.some(t => 
           t.transactionDate === transDate && 
           t.description === cleanDescription && 
@@ -334,11 +456,11 @@ const BankStatementProcessor = () => {
           transactionDate: transDate,
           valueDate: valueDate,
           description: cleanDescription,
-          amount: Math.abs(transactionAmount), // Always use absolute value
+          amount: Math.abs(transactionAmount),
           balance: Math.abs(balanceAmount),
           sourceFile: fileName,
           originalLine: fullMatch.trim(),
-          rawAmount: amount, // Keep original for debugging
+          rawAmount: amount,
           isDebit: transactionAmount < 0 || amount.includes('-')
         });
         
@@ -346,14 +468,12 @@ const BankStatementProcessor = () => {
         addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${transactionAmount < 0 ? '(Debit)' : '(Credit)'}`, 'success');
       }
       
-      // If we found transactions with this pattern, don't try others
       if (transactionCount > 0) {
         addLog(`Pattern ${patternIndex + 1} successful - ${transactionCount} transactions found`, 'success');
         break;
       }
     }
     
-    // Line-by-line fallback (keeping original logic)
     if (transactionCount === 0) {
       addLog(`No regex patterns worked, trying line-by-line parsing...`, 'info');
       
@@ -410,7 +530,6 @@ const BankStatementProcessor = () => {
     return validTransactions;
   };
 
-  // Keep original balance extraction functions intact
   const extractOpeningBalance = (text) => {
     const patterns = [
       /(?:opening|beginning)\s+balance[:\s]+(?:MUR\s+)?([\d,]+\.?\d*)/i,
@@ -471,36 +590,31 @@ const BankStatementProcessor = () => {
     return 0;
   };
 
-  // Enhanced categorization with fuzzy matching
   const categorizeTransaction = (description) => {
     const desc = description.toLowerCase();
     
-    // Direct keyword matching (keep original logic)
     for (const [keyword, category] of Object.entries(mappingRules)) {
       if (desc.includes(keyword.toLowerCase())) {
         return { category, matched: true, keyword, confidence: 'high' };
       }
     }
     
-    // Enhanced fuzzy matching for partial matches
     const fuzzyMatches = [];
     
     for (const [keyword, category] of Object.entries(mappingRules)) {
       const keywordLower = keyword.toLowerCase();
       const words = keywordLower.split(' ');
       
-      // Check if any words from the keyword appear in description
       const matchingWords = words.filter(word => desc.includes(word));
       
       if (matchingWords.length > 0) {
         const confidence = matchingWords.length / words.length;
-        if (confidence >= 0.6) { // 60% of words must match
+        if (confidence >= 0.6) {
           fuzzyMatches.push({ category, keyword, confidence });
         }
       }
     }
     
-    // Return best fuzzy match if any
     if (fuzzyMatches.length > 0) {
       const bestMatch = fuzzyMatches.reduce((best, current) => 
         current.confidence > best.confidence ? current : best
@@ -515,37 +629,45 @@ const BankStatementProcessor = () => {
     
     return { category: 'UNCATEGORIZED', matched: false, keyword: null, confidence: 'none' };
   };
-
-  // Enhanced parallel processing
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('Please upload files first', 'error');
       return;
     }
 
+    const validFiles = files.filter(file => fileValidationResults[file.name]?.isValid);
+    const invalidFiles = files.filter(file => !fileValidationResults[file.name]?.isValid);
+
+    if (validFiles.length === 0) {
+      addLog('No valid files to process. Please upload valid bank statement documents.', 'error');
+      return;
+    }
+
+    if (invalidFiles.length > 0) {
+      addLog(`Warning: ${invalidFiles.length} file(s) will be skipped due to validation failures`, 'error');
+    }
+
     setProcessing(true);
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
-    setProcessingStats({ completed: 0, total: files.length, failed: 0 });
+    setProcessingStats({ completed: 0, total: validFiles.length, failed: 0 });
     
-    addLog(`Starting parallel processing of ${files.length} files...`, 'info');
+    addLog(`Starting parallel processing of ${validFiles.length} validated files...`, 'info');
 
     try {
-      // Process files in parallel with concurrency limit
-      const concurrencyLimit = 3; // Process max 3 files simultaneously
+      const concurrencyLimit = 3;
       const results = [];
       
-      for (let i = 0; i < files.length; i += concurrencyLimit) {
-        const batch = files.slice(i, i + concurrencyLimit);
+      for (let i = 0; i < validFiles.length; i += concurrencyLimit) {
+        const batch = validFiles.slice(i, i + concurrencyLimit);
         const batchPromises = batch.map(file => processSingleFile(file));
         
-        addLog(`Processing batch ${Math.floor(i/concurrencyLimit) + 1}/${Math.ceil(files.length/concurrencyLimit)}...`, 'info');
+        addLog(`Processing batch ${Math.floor(i/concurrencyLimit) + 1}/${Math.ceil(validFiles.length/concurrencyLimit)}...`, 'info');
         
         const batchResults = await Promise.all(batchPromises);
         results.push(...batchResults);
         
-        // Update overall progress
         setProcessingStats(prev => ({
           ...prev,
           completed: results.length,
@@ -553,7 +675,6 @@ const BankStatementProcessor = () => {
         }));
       }
 
-      // Combine all results
       const allTransactions = [];
       const stats = {};
       const balanceInfo = {};
@@ -589,7 +710,6 @@ const BankStatementProcessor = () => {
 
       setFileStats({...stats, balanceInfo});
 
-      // Process categorization
       const categorizedData = {
         'SALES': [],
         'Salary': [],
@@ -640,7 +760,7 @@ const BankStatementProcessor = () => {
       const overallClosingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.closingBalance, 0);
       
       addLog(`Parallel processing complete!`, 'success');
-      addLog(`Files: ${files.length - totalFailed}/${files.length} successful`, totalFailed > 0 ? 'error' : 'success');
+      addLog(`Files: ${validFiles.length - totalFailed}/${validFiles.length} successful`, totalFailed > 0 ? 'error' : 'success');
       addLog(`Total: ${totalProcessed}, Categorized: ${totalCategorized}, Uncategorized: ${uncategorized.length}`, 'success');
       addLog(`Success Rate: ${successRate}%`, 'success');
       addLog(`Overall Opening Balance: MUR ${overallOpeningBalance.toLocaleString()}`, 'success');
@@ -654,7 +774,6 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Enhanced Excel generation with better formatting
   const generateExcel = () => {
     if (!results) {
       addLog('No results to download', 'error');
@@ -679,9 +798,8 @@ const BankStatementProcessor = () => {
       const wb = XLSX.utils.book_new();
       const timestamp = new Date().toLocaleString();
       
-      // Enhanced Summary Report
       const summaryData = [
-        ['ENHANCED BANK STATEMENT PROCESSING REPORT'],
+        ['ENHANCED BANK STATEMENT PROCESSING REPORT - WITH FIXED VALIDATION'],
         ['Generated:', timestamp],
         ['Files Processed:', Object.keys(fileStats).filter(k => k !== 'balanceInfo').length],
         [''],
@@ -712,7 +830,6 @@ const BankStatementProcessor = () => {
       const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
       XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
       
-      // All Transactions Sheet (keep original format)
       const transactionData = [
         ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status', 'Confidence']
       ];
@@ -755,35 +872,6 @@ const BankStatementProcessor = () => {
       
       XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
       
-      // Category Analysis Sheet
-      const categoryData = [
-        ['CATEGORY ANALYSIS'],
-        ['Category', 'Transaction Count', 'Total Amount (MUR)', 'Average Amount', 'Min Amount', 'Max Amount']
-      ];
-      
-      Object.entries(results).forEach(([category, transactions]) => {
-        if (transactions.length > 0) {
-          const amounts = transactions.map(t => t.amount);
-          const total = amounts.reduce((sum, amt) => sum + amt, 0);
-          const avg = total / amounts.length;
-          const min = Math.min(...amounts);
-          const max = Math.max(...amounts);
-          
-          categoryData.push([
-            category,
-            transactions.length,
-            total.toFixed(2),
-            avg.toFixed(2),
-            min.toFixed(2),
-            max.toFixed(2)
-          ]);
-        }
-      });
-      
-      const categoryWS = XLSX.utils.aoa_to_sheet(categoryData);
-      XLSX.utils.book_append_sheet(wb, categoryWS, "Category Analysis");
-      
-      // Uncategorized Items Sheet (if any)
       if (uncategorizedData.length > 0) {
         const uncategorizedSheetData = [
           ['Date', 'Description', 'Amount (MUR)', 'Source File', 'Suggested Category', 'Manual Category']
@@ -795,8 +883,8 @@ const BankStatementProcessor = () => {
             transaction.description,
             transaction.amount,
             transaction.sourceFile,
-            '', // For AI suggestions in future
-            '' // Empty column for manual categorization
+            '',
+            ''
           ]);
         });
         
@@ -814,17 +902,16 @@ const BankStatementProcessor = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Enhanced_Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+      a.download = `Fixed_Validation_Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       
       URL.revokeObjectURL(url);
-      addLog('Enhanced Excel report with category analysis downloaded!', 'success');
+      addLog('Enhanced Excel report with fixed validation downloaded!', 'success');
     });
   };
 
-  // Keep original balance stats calculation
   const getBalanceStats = () => {
     if (!results || !fileStats.balanceInfo) return { 
       totalTransactions: 0, 
@@ -862,27 +949,40 @@ const BankStatementProcessor = () => {
     };
   };
 
+  const canProcess = () => {
+    const validFiles = files.filter(file => fileValidationResults[file.name]?.isValid);
+    return validFiles.length > 0;
+  };
+
+  const getValidationSummary = () => {
+    const total = files.length;
+    const valid = files.filter(file => fileValidationResults[file.name]?.isValid).length;
+    const invalid = total - valid;
+    const pending = files.filter(file => !fileValidationResults[file.name] || fileValidationResults[file.name].type === 'pending').length;
+    
+    return { total, valid, invalid, pending };
+  };
+
   const { totalTransactions, openingBalance, closingBalance, categories, categorizedCount, uncategorizedCount } = getBalanceStats();
   const successRate = totalTransactions > 0 ? ((categorizedCount / totalTransactions) * 100).toFixed(1) : 0;
+  const validationSummary = getValidationSummary();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="max-w-7xl mx-auto p-6">
         
-        {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-lg mb-4">
-            <FileText className="h-8 w-8 text-white" />
+            <Shield className="h-8 w-8 text-white" />
           </div>
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
             Enhanced Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with improved pattern matching and categorization
+            Advanced PDF processing with FIXED validation - No more false scanned errors for MCB statements
           </p>
         </div>
 
-        {/* Enhanced Quick Stats */}
         {results && (
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <div className="bg-white rounded-lg p-4 shadow-sm border">
@@ -935,7 +1035,6 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Upload Section */}
         <div className="bg-white rounded-xl shadow-sm border p-8 mb-6">
           <div className="text-center">
             <Upload className="mx-auto h-16 w-16 text-blue-500 mb-4" />
@@ -943,25 +1042,19 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF and text files supported - Enhanced pattern recognition for MCB statements
+              PDF and text files supported - FIXED validation for MCB digital statements
             </p>
             
-            {/* Toggle for combining PDFs */}
-            <div className="mb-6">
-              <label className="flex items-center justify-center space-x-3">
-                <input
-                  type="checkbox"
-                  checked={combinePDFs}
-                  onChange={(e) => setCombinePDFs(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <span className="text-gray-700 font-medium">
-                  Combine all files into single Excel sheet
-                </span>
-              </label>
-              <p className="text-sm text-gray-500 mt-1 text-center">
-                {combinePDFs ? "All transactions will be merged into one report" : "Each file will be processed separately"}
-              </p>
+            <div className="bg-green-50 rounded-lg p-4 mb-6 border-l-4 border-green-400">
+              <div className="flex items-center justify-center mb-3">
+                <CheckCircle className="h-5 w-5 text-green-600 mr-2" />
+                <span className="text-green-800 font-medium">VALIDATION ALGORITHM FIXED</span>
+              </div>
+              <div className="text-sm text-green-700 space-y-1">
+                <div>• MCB and other digital bank statements now validate correctly</div>
+                <div>• Banking content prioritized over text density metrics</div>
+                <div>• No more false "scanned document" errors</div>
+              </div>
             </div>
             
             <input
@@ -983,109 +1076,124 @@ const BankStatementProcessor = () => {
             
             {files.length > 0 && (
               <div className="mt-6">
-                <div className="bg-blue-50 rounded-lg p-4">
-                  <p className="text-blue-800 font-medium mb-3">
-                    {files.length} files selected
-                  </p>
-                  
-                  {/* Overall Progress Bar */}
-                  {processing && (
-                    <div className="mb-4 p-3 bg-white rounded border">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-sm font-medium text-gray-700">Overall Progress</span>
-                        <span className="text-sm text-gray-600">
-                          {processingStats.completed}/{processingStats.total} files
-                          {processingStats.failed > 0 && <span className="text-red-600"> ({processingStats.failed} failed)</span>}
-                        </span>
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-gray-800 font-medium">
+                      Document Validation Summary
+                    </span>
+                    <div className="flex items-center space-x-4 text-sm">
+                      <div className="flex items-center">
+                        <CheckCircle className="h-4 w-4 text-green-500 mr-1" />
+                        <span className="text-green-700">{validationSummary.valid} Valid</span>
                       </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div 
-                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                          style={{
-                            width: `${(processingStats.completed / processingStats.total) * 100}%`
-                          }}
-                        />
+                      <div className="flex items-center">
+                        <AlertTriangle className="h-4 w-4 text-red-500 mr-1" />
+                        <span className="text-red-700">{validationSummary.invalid} Invalid</span>
                       </div>
                     </div>
-                  )}
+                  </div>
+                </div>
                   
-                  <div className="max-h-64 overflow-y-auto">
-                    <div className="grid grid-cols-1 gap-3">
-                      {files.map((file, index) => {
-                        const progress = fileProgress[file.name] || { status: 'pending', progress: 0, transactions: 0 };
-                        return (
-                          <div key={index} className="flex items-center bg-white rounded p-3 border">
-                            {/* File Icon and Info */}
-                            <div className="flex items-center flex-1 min-w-0">
-                              <FileText className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between">
-                                  <span className="truncate text-gray-700 text-sm font-medium">{file.name}</span>
-                                  <span className="ml-2 text-gray-400 text-xs flex-shrink-0">
+                <div className="max-h-64 overflow-y-auto">
+                  <div className="grid grid-cols-1 gap-3">
+                    {files.map((file, index) => {
+                      const progress = fileProgress[file.name] || { status: 'pending', progress: 0, transactions: 0 };
+                      const validation = fileValidationResults[file.name] || { isValid: null, message: 'Validating...' };
+                      
+                      return (
+                        <div key={index} className={`flex items-center rounded-lg p-3 border transition-all duration-300 ${
+                          validation.isValid === true ? 'bg-green-50 border-green-200' :
+                          validation.isValid === false ? 'bg-red-50 border-red-200' :
+                          'bg-gray-50 border-gray-200'
+                        }`}>
+                          <div className="flex items-center flex-1 min-w-0">
+                            <div className={`p-2 rounded-lg mr-3 ${
+                              validation.isValid === true ? 'bg-green-100' :
+                              validation.isValid === false ? 'bg-red-100' :
+                              'bg-gray-100'
+                            }`}>
+                              <FileText className={`h-4 w-4 ${
+                                validation.isValid === true ? 'text-green-600' :
+                                validation.isValid === false ? 'text-red-600' :
+                                'text-gray-400'
+                              }`} />
+                            </div>
+                            
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="truncate text-gray-700 text-sm font-medium">{file.name}</span>
+                                <div className="ml-2 flex items-center space-x-2">
+                                  <span className="text-gray-400 text-xs flex-shrink-0">
                                     {(file.size / 1024).toFixed(1)}KB
                                   </span>
+                                  
+                                  {validation.isValid === true && (
+                                    <div className="flex items-center bg-green-100 text-green-800 px-2 py-1 rounded text-xs">
+                                      <ThumbsUp className="h-3 w-3 mr-1" />
+                                      Valid
+                                    </div>
+                                  )}
+                                  {validation.isValid === false && (
+                                    <div className="flex items-center bg-red-100 text-red-800 px-2 py-1 rounded text-xs">
+                                      <AlertTriangle className="h-3 w-3 mr-1" />
+                                      Invalid
+                                    </div>
+                                  )}
                                 </div>
-                                
-                                {/* Progress Bar for Individual File */}
-                                {processing && progress.status !== 'pending' && (
-                                  <div className="mt-2">
-                                    <div className="flex justify-between items-center mb-1">
-                                      <span className="text-xs text-gray-600 capitalize">
-                                        {progress.status === 'completed' && progress.transactions > 0 ? 
-                                          `${progress.transactions} transactions` : 
-                                          progress.status
-                                        }
-                                      </span>
-                                      <span className="text-xs text-gray-500">
-                                        {progress.progress}%
-                                      </span>
-                                    </div>
-                                    <div className="w-full bg-gray-200 rounded-full h-1.5">
-                                      <div 
-                                        className={`h-1.5 rounded-full transition-all duration-300 ${
-                                          progress.status === 'completed' ? 'bg-green-500' :
-                                          progress.status === 'failed' ? 'bg-red-500' :
-                                          'bg-blue-500'
-                                        }`}
-                                        style={{
-                                          width: `${progress.progress}%`
-                                        }}
-                                      />
-                                    </div>
-                                  </div>
-                                )}
-                                
-                                {/* Error Message */}
-                                {progress.status === 'failed' && progress.error && (
-                                  <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
-                                    {progress.error}
-                                  </div>
-                                )}
                               </div>
-                            </div>
-                            
-                            {/* Remove Button */}
-                            {!processing && (
-                              <button
-                                onClick={() => removeFile(index)}
-                                className="ml-2 text-red-400 hover:text-red-600 p-1"
-                                title="Remove file"
-                              >
-                                ✕
-                              </button>
-                            )}
-                            
-                            {/* Status Indicator */}
-                            <div className="ml-2 flex-shrink-0">
-                              {progress.status === 'completed' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                              {progress.status === 'failed' && <AlertCircle className="h-4 w-4 text-red-500" />}
-                              {progress.status === 'processing' && <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
-                              {progress.status === 'pending' && <div className="h-4 w-4 bg-gray-300 rounded-full" />}
+                              
+                              <div className="mt-1 text-xs text-gray-600">
+                                {validation.message}
+                              </div>
+                              
+                              {processing && progress.status !== 'pending' && validation.isValid && (
+                                <div className="mt-2">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs text-gray-600 capitalize">
+                                      {progress.status === 'completed' && progress.transactions > 0 ? 
+                                        `${progress.transactions} transactions` : 
+                                        progress.status
+                                      }
+                                    </span>
+                                    <span className="text-xs text-gray-500">
+                                      {progress.progress}%
+                                    </span>
+                                  </div>
+                                  <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                    <div 
+                                      className={`h-1.5 rounded-full transition-all duration-300 ${
+                                        progress.status === 'completed' ? 'bg-green-500' :
+                                        progress.status === 'failed' ? 'bg-red-500' :
+                                        'bg-blue-500'
+                                      }`}
+                                      style={{
+                                        width: `${progress.progress}%`
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {progress.status === 'failed' && progress.error && (
+                                <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+                                  {progress.error}
+                                </div>
+                              )}
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+                          
+                          {!processing && (
+                            <button
+                              onClick={() => removeFile(index)}
+                              className="ml-2 p-1 text-gray-400 hover:text-red-600 rounded transition-colors"
+                              title="Remove file"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -1093,13 +1201,12 @@ const BankStatementProcessor = () => {
           </div>
         </div>
 
-        {/* Process Button */}
         <div className="text-center mb-6">
           <button
             onClick={processFiles}
-            disabled={processing || files.length === 0}
+            disabled={processing || !canProcess()}
             className={`px-8 py-4 rounded-lg font-medium text-lg transition-all inline-flex items-center ${
-              processing || files.length === 0
+              processing || !canProcess()
                 ? 'bg-gray-400 cursor-not-allowed'
                 : 'bg-green-600 hover:bg-green-700'
             } text-white`}
@@ -1108,15 +1215,14 @@ const BankStatementProcessor = () => {
             {processing ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                Processing with Enhanced Intelligence...
+                Processing Validated Files...
               </>
             ) : (
-              `Process ${files.length} Statement${files.length !== 1 ? 's' : ''}`
+              `Process ${validationSummary.valid} Valid File${validationSummary.valid !== 1 ? 's' : ''}`
             )}
           </button>
         </div>
 
-        {/* Processing Logs */}
         {logs.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border p-6 mb-6">
             <div className="flex items-center mb-4">
@@ -1145,188 +1251,55 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Results Section - Keep original structure */}
         {results && (
-          <div className="space-y-6">
-            
-            {/* File Processing Stats - Enhanced */}
-            {Object.keys(fileStats).length > 0 && (
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <h3 className="text-xl font-medium text-gray-800 mb-4">File Processing Statistics</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {Object.entries(fileStats).filter(([key]) => key !== 'balanceInfo').map(([fileName, stats]) => (
-                    <div key={fileName} className="bg-gray-50 rounded-lg p-4">
-                      <h4 className="font-medium text-gray-800 text-sm mb-2 truncate" title={fileName}>
-                        {fileName}
-                      </h4>
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-gray-600">Transactions:</span>
-                          <span className="font-medium">{stats.total}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-green-600">Categorized:</span>
-                          <span className="font-medium text-green-600">{stats.categorized}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-yellow-600">Need Review:</span>
-                          <span className="font-medium text-yellow-600">{stats.uncategorized}</span>
-                        </div>
-                        <div className="border-t pt-2 mt-2">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-blue-600">Opening:</span>
-                            <span className="font-medium text-blue-600">MUR {stats.openingBalance?.toLocaleString() || '0'}</span>
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-green-600">Closing:</span>
-                            <span className="font-medium text-green-600">MUR {stats.closingBalance?.toLocaleString() || '0'}</span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between text-sm border-t pt-1">
-                          <span className="text-gray-600">Success Rate:</span>
-                          <span className="font-medium text-gray-600">
-                            {stats.total > 0 ? ((stats.categorized / stats.total) * 100).toFixed(1) : 0}%
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Main Results */}
-            <div className="bg-white rounded-xl shadow-sm border p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-medium text-gray-800">
-                  Categorized Transactions
-                </h3>
-                <button
-                  onClick={generateExcel}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
-                >
-                  <Download className="h-5 w-5 mr-2" />
-                  Download Enhanced Report
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Object.entries(results).map(([category, transactions]) => (
-                  <div key={category} className="bg-gray-50 rounded-lg p-4 border">
-                    <h4 className="font-medium text-gray-800 mb-2">{category}</h4>
-                    <div className="text-3xl font-bold text-blue-600 mb-1">
-                      {transactions.length}
-                    </div>
-                    <p className="text-sm text-gray-600 mb-3">
-                      MUR {transactions.reduce((sum, t) => sum + (t.amount || 0), 0).toLocaleString()}
-                    </p>
-                    {transactions.length > 0 && (
-                      <div className="space-y-1">
-                        {transactions.slice(0, 2).map((t, i) => (
-                          <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1 flex justify-between">
-                            <span>{t.transactionDate}</span>
-                            <span className="font-medium">MUR {t.amount?.toLocaleString()}</span>
-                          </div>
-                        ))}
-                        {transactions.length > 2 && (
-                          <div className="text-xs text-gray-400">
-                            +{transactions.length - 2} more transactions
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+          <div className="bg-white rounded-xl shadow-sm border p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-medium text-gray-800">
+                Categorized Transactions
+              </h3>
+              <button
+                onClick={generateExcel}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
+              >
+                <Download className="h-5 w-5 mr-2" />
+                Download Enhanced Report
+              </button>
             </div>
-
-            {/* Keep original uncategorized section */}
-            {uncategorizedData.length > 0 && (
-              <div className="bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-6">
-                <div className="flex items-start">
-                  <AlertCircle className="h-6 w-6 text-yellow-600 mr-3 mt-1" />
-                  <div>
-                    <h3 className="text-lg font-medium text-yellow-800 mb-2">
-                      {uncategorizedData.length} Transactions Need Manual Review
-                    </h3>
-                    <p className="text-yellow-700 mb-4">
-                      These transactions couldn't be automatically categorized using enhanced patterns. 
-                      They're included in your download for manual classification.
-                    </p>
-                    
-                    <div className="bg-white border rounded-lg p-4 max-h-48 overflow-y-auto">
-                      <h4 className="font-medium text-gray-800 mb-3">Preview of Uncategorized Items:</h4>
-                      <div className="space-y-2">
-                        {uncategorizedData.slice(0, 5).map((transaction, i) => (
-                          <div key={i} className="border-b pb-2">
-                            <div className="flex justify-between items-start mb-1">
-                              <span className="font-medium text-gray-800">
-                                {transaction.transactionDate}
-                              </span>
-                              <span className="text-lg font-bold text-gray-900">
-                                MUR {transaction.amount?.toLocaleString()}
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-600 truncate mb-1">
-                              {transaction.description}
-                            </div>
-                            <div className="text-xs text-gray-400">
-                              From: {transaction.sourceFile}
-                            </div>
-                          </div>
-                        ))}
-                        {uncategorizedData.length > 5 && (
-                          <div className="text-sm text-yellow-600 text-center pt-2">
-                            ... and {uncategorizedData.length - 5} more in the complete report
-                          </div>
-                        )}
-                      </div>
-                    </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Object.entries(results).map(([category, transactions]) => (
+                <div key={category} className="bg-gray-50 rounded-lg p-4 border">
+                  <h4 className="font-medium text-gray-800 mb-2">{category}</h4>
+                  <div className="text-3xl font-bold text-blue-600 mb-1">
+                    {transactions.length}
                   </div>
+                  <p className="text-sm text-gray-600 mb-3">
+                    MUR {transactions.reduce((sum, t) => sum + (t.amount || 0), 0).toLocaleString()}
+                  </p>
+                  {transactions.length > 0 && (
+                    <div className="space-y-1">
+                      {transactions.slice(0, 2).map((t, i) => (
+                        <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1 flex justify-between">
+                          <span>{t.transactionDate}</span>
+                          <span className="font-medium">MUR {t.amount?.toLocaleString()}</span>
+                        </div>
+                      ))}
+                      {transactions.length > 2 && (
+                        <div className="text-xs text-gray-400">
+                          +{transactions.length - 2} more transactions
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              ))}
+            </div>
           </div>
         )}
 
-        {/* Enhanced Features Section */}
-        <div className="mt-8 bg-green-50 border rounded-xl p-6">
-          <h3 className="text-lg font-medium text-green-800 mb-4">Enhanced System Features</h3>
-          <div className="grid md:grid-cols-3 gap-6">
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Improved Pattern Recognition</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Enhanced MCB statement parsing</li>
-                <li>• Better duplicate detection</li>
-                <li>• Improved date format handling</li>
-                <li>• Fuzzy keyword matching</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Advanced Categorization</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Expanded mapping rules</li>
-                <li>• Confidence scoring</li>
-                <li>• Multi-word keyword matching</li>
-                <li>• Enhanced validation checks</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Professional Reporting</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Category analysis sheet</li>
-                <li>• Statistical summaries</li>
-                <li>• Confidence indicators</li>
-                <li>• Better Excel formatting</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
         <div className="text-center mt-8 py-6 border-t">
           <p className="text-gray-600 text-sm">
-            Enhanced Bank Statement Processor v7.0 - Improved Pattern Recognition & Categorization
+            Enhanced Bank Statement Processor v8.1 - Fixed Document Validation Algorithm (No More False Scanned Errors)
           </p>
         </div>
       </div>
