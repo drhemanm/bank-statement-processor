@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
+import Tesseract from 'tesseract.js';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
@@ -12,7 +13,6 @@ const BankStatementProcessor = () => {
   const [logs, setLogs] = useState([]);
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
-  const [debugText, setDebugText] = useState(''); // For debugging
   const fileInputRef = useRef(null);
 
   // Enhanced mapping rules based on MCB statements
@@ -48,46 +48,89 @@ const BankStatementProcessor = () => {
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
-    setDebugText('');
     addLog(`${uploadedFiles.length} file(s) uploaded successfully`, 'success');
   };
 
-  // Enhanced PDF text extraction with debugging
+  // Convert PDF page to image for OCR
+  const pdfPageToImage = async (page) => {
+    const viewport = page.getViewport({ scale: 2.0 });
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
+
+    const renderContext = {
+      canvasContext: context,
+      viewport: viewport
+    };
+
+    await page.render(renderContext).promise;
+    return canvas.toDataURL('image/png');
+  };
+
+  // Enhanced PDF extraction with OCR fallback
   const extractTextFromPDF = async (file) => {
     try {
-      addLog(`Reading PDF: ${file.name}...`, 'info');
+      addLog(`📄 Reading PDF: ${file.name}...`, 'info');
       
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       
-      addLog(`PDF loaded: ${pdf.numPages} pages found`, 'success');
+      addLog(`📖 PDF loaded: ${pdf.numPages} pages found`, 'success');
       
       let fullText = '';
       
+      // First try regular text extraction
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Extract text items and join them
         const pageText = textContent.items
           .map(item => item.str)
           .join(' ');
         
         fullText += pageText + '\n';
-        
-        addLog(`Page ${pageNum} processed - ${pageText.length} characters`, 'info');
+        addLog(`📄 Page ${pageNum} text extracted - ${pageText.length} chars`, 'info');
       }
       
-      // DEBUG: Show first 500 characters of extracted text
-      const preview = fullText.substring(0, 500);
-      addLog(`📝 First 500 chars: "${preview}..."`, 'info');
-      setDebugText(fullText.substring(0, 2000)); // Store for display
+      // Check if we got meaningful text
+      const meaningfulLines = fullText.split('\n').filter(line => line.trim().length > 10).length;
+      addLog(`📊 Meaningful text lines found: ${meaningfulLines}`, 'info');
       
-      addLog(`✅ PDF text extraction complete - ${fullText.length} total characters`, 'success');
+      // If very little text extracted, try OCR
+      if (meaningfulLines < 10) {
+        addLog(`🔍 Low text content detected - switching to OCR mode...`, 'info');
+        fullText = ''; // Reset
+        
+        for (let pageNum = 1; pageNum <= Math.min(pdf.numPages, 3); pageNum++) { // Limit to first 3 pages for speed
+          const page = await pdf.getPage(pageNum);
+          
+          addLog(`🖼️ Converting page ${pageNum} to image for OCR...`, 'info');
+          const imageData = await pdfPageToImage(page);
+          
+          addLog(`🤖 Running OCR on page ${pageNum}...`, 'info');
+          const { data: { text } } = await Tesseract.recognize(imageData, 'eng', {
+            logger: (m) => {
+              if (m.status === 'recognizing text') {
+                addLog(`OCR Progress: ${Math.round(m.progress * 100)}%`, 'info');
+              }
+            }
+          });
+          
+          fullText += text + '\n';
+          addLog(`✅ OCR completed for page ${pageNum} - ${text.length} chars extracted`, 'success');
+        }
+      }
+      
+      // Show sample of extracted text
+      const preview = fullText.substring(0, 500).replace(/\s+/g, ' ').trim();
+      addLog(`📝 Text sample: "${preview}..."`, 'info');
+      
+      addLog(`✅ Text extraction complete - ${fullText.length} total characters`, 'success');
       return fullText;
       
     } catch (error) {
-      addLog(`❌ PDF extraction failed for ${file.name}: ${error.message}`, 'error');
+      addLog(`❌ PDF processing failed: ${error.message}`, 'error');
       throw error;
     }
   };
@@ -98,55 +141,53 @@ const BankStatementProcessor = () => {
     
     addLog(`🔍 Analyzing ${lines.length} lines from ${fileName}...`, 'info');
     
-    // DEBUG: Show first 10 lines that have content
-    const sampleLines = lines.filter(line => line.trim().length > 10).slice(0, 10);
-    addLog(`📋 Sample lines: ${JSON.stringify(sampleLines)}`, 'info');
+    // Clean and filter lines
+    const cleanLines = lines
+      .map(line => line.trim())
+      .filter(line => line.length > 10);
     
-    let potentialTransactionLines = 0;
+    addLog(`📋 ${cleanLines.length} substantial lines to process`, 'info');
     
-    for (let line of lines) {
-      line = line.trim();
-      
-      // Skip headers and irrelevant lines
-      if (!line || line.length < 15) {
-        continue;
-      }
-      
-      // DEBUG: Check for date patterns
-      const dateMatches = line.match(/\d{2}\/\d{2}\/\d{4}/g);
-      if (dateMatches) {
-        addLog(`📅 Found date line: "${line}"`, 'info');
-        potentialTransactionLines++;
-      }
-      
-      // Skip common headers
+    let dateLineCount = 0;
+    let transactionCount = 0;
+    
+    for (let line of cleanLines) {
+      // Skip obvious headers
       if (line.includes('TRANS DATE') || 
           line.includes('Opening Balance') ||
           line.includes('Closing Balance') ||
           line.includes('STATEMENT') ||
           line.includes('UPLIFT MARKETING') ||
-          line.includes('MCB') ||
           line.includes('Page :') ||
           line.includes('For any change')) {
         continue;
       }
       
-      // Look for MCB transaction pattern with dates
+      // Look for date patterns (DD/MM/YYYY or DD/MM/YY)
+      const dateMatches = line.match(/\d{1,2}\/\d{1,2}\/\d{2,4}/g);
+      if (dateMatches) {
+        dateLineCount++;
+        addLog(`📅 Date found: "${line.substring(0, 80)}..."`, 'info');
+      }
+      
+      // Look for amount patterns
       const numberMatches = line.match(/\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g);
       
-      if (dateMatches && numberMatches && dateMatches.length >= 1 && numberMatches.length >= 2) {
+      if (dateMatches && numberMatches && dateMatches.length >= 1 && numberMatches.length >= 1) {
+        // Try to parse transaction
         const transDate = dateMatches[0];
         const valueDate = dateMatches[1] || dateMatches[0];
         
-        // Get amount and balance (last two numbers usually)
-        const amount = parseFloat(numberMatches[numberMatches.length - 2].replace(/,/g, ''));
-        const balance = parseFloat(numberMatches[numberMatches.length - 1].replace(/,/g, ''));
+        // Find the transaction amount (usually the largest number that's not a balance)
+        const amounts = numberMatches.map(n => parseFloat(n.replace(/,/g, '')));
+        const amount = amounts.find(a => a > 0 && a < 1000000) || amounts[0]; // Reasonable transaction amount
+        const balance = amounts[amounts.length - 1]; // Last number is usually balance
         
-        // Extract description by removing dates and numbers
+        // Extract description
         let description = line;
-        description = description.replace(/\d{2}\/\d{2}\/\d{4}/g, '');
-        description = description.replace(/\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g, '');
-        description = description.replace(/\s+/g, ' ').trim();
+        description = description.replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, ''); // Remove dates
+        description = description.replace(/\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g, ''); // Remove numbers
+        description = description.replace(/\s+/g, ' ').trim(); // Clean whitespace
         
         // Only add if we have meaningful data
         if (description.length > 3 && amount > 0 && !isNaN(amount)) {
@@ -160,16 +201,13 @@ const BankStatementProcessor = () => {
             originalLine: line.substring(0, 100)
           });
           
-          addLog(`✅ Transaction found: ${transDate} - ${description} - MUR ${amount}`, 'success');
-        } else {
-          addLog(`❌ Rejected line: desc="${description}", amount=${amount}`, 'error');
+          transactionCount++;
+          addLog(`✅ Transaction ${transactionCount}: ${transDate} - ${description} - MUR ${amount}`, 'success');
         }
       }
     }
     
-    addLog(`📊 Lines with dates: ${potentialTransactionLines}`, 'info');
-    addLog(`🎯 Valid transactions extracted: ${transactions.length}`, 'success');
-    
+    addLog(`📊 Summary: ${dateLineCount} date lines, ${transactionCount} valid transactions`, 'success');
     return transactions;
   };
 
@@ -196,8 +234,7 @@ const BankStatementProcessor = () => {
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
-    setDebugText('');
-    addLog('🚀 Starting bulk processing...', 'info');
+    addLog('🚀 Starting enhanced processing with OCR support...', 'info');
 
     try {
       const allTransactions = [];
@@ -211,16 +248,27 @@ const BankStatementProcessor = () => {
         
         if (file.type === 'application/pdf') {
           try {
-            // Use our enhanced PDF extraction
             extractedText = await extractTextFromPDF(file);
           } catch (error) {
             addLog(`❌ Could not process PDF ${file.name}: ${error.message}`, 'error');
             continue;
           }
         } else if (file.type.startsWith('image/')) {
-          addLog(`🖼️ Image OCR for ${file.name} - feature coming soon`, 'info');
-          addLog(`💡 Tip: Convert images to PDF or text for now`, 'info');
-          continue;
+          try {
+            addLog(`🖼️ Processing image ${file.name} with OCR...`, 'info');
+            const { data: { text } } = await Tesseract.recognize(file, 'eng', {
+              logger: (m) => {
+                if (m.status === 'recognizing text') {
+                  addLog(`OCR Progress: ${Math.round(m.progress * 100)}%`, 'info');
+                }
+              }
+            });
+            extractedText = text;
+            addLog(`✅ OCR completed for ${file.name}`, 'success');
+          } catch (error) {
+            addLog(`❌ OCR failed for ${file.name}: ${error.message}`, 'error');
+            continue;
+          }
         } else {
           // For text files
           try {
@@ -243,7 +291,7 @@ const BankStatementProcessor = () => {
             uncategorized: 0
           };
           
-          addLog(`✅ Final result: ${transactions.length} transactions from ${file.name}`, 'success');
+          addLog(`✅ Final: ${transactions.length} transactions from ${file.name}`, 'success');
         }
       }
 
@@ -353,11 +401,14 @@ const BankStatementProcessor = () => {
       });
     }
     
-    // Add debug section
-    if (debugText) {
-      csvContent += `\n=== DEBUG: EXTRACTED TEXT SAMPLE ===\n`;
-      csvContent += `"${debugText.replace(/"/g, '""')}"\n`;
-    }
+    // SECTION 3: Summary Statistics
+    csvContent += `\n=== PROCESSING SUMMARY ===\n`;
+    csvContent += `File Name,Total Transactions,Categorized,Uncategorized,Success Rate\n`;
+    
+    Object.entries(fileStats).forEach(([fileName, stats]) => {
+      const successRate = stats.total > 0 ? ((stats.categorized / stats.total) * 100).toFixed(1) : 0;
+      csvContent += `"${fileName}","${stats.total}","${stats.categorized}","${stats.uncategorized}","${successRate}%"\n`;
+    });
 
     // Download the file
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
@@ -365,13 +416,13 @@ const BankStatementProcessor = () => {
     
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Bank_Statements_Debug_Report_${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     
     URL.revokeObjectURL(url);
-    addLog('📋 Debug report downloaded!', 'success');
+    addLog('📋 Complete report downloaded!', 'success');
   };
 
   // Calculate totals for display
@@ -405,22 +456,12 @@ const BankStatementProcessor = () => {
             <FileText className="h-8 w-8 text-white" />
           </div>
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
-            🏦 Bank Statement Processor (DEBUG MODE)
+            🏦 Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Debug version - shows detailed extraction logs
+            Advanced PDF processing with OCR support for scanned documents
           </p>
         </div>
-
-        {/* Debug Text Display */}
-        {debugText && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-            <h3 className="font-medium text-yellow-800 mb-2">🔍 Extracted PDF Text Sample:</h3>
-            <div className="bg-white border rounded p-3 text-sm font-mono max-h-32 overflow-y-auto">
-              {debugText}
-            </div>
-          </div>
-        )}
 
         {/* Quick Stats (when results available) */}
         {results && (
@@ -449,17 +490,17 @@ const BankStatementProcessor = () => {
           <div className="text-center">
             <Upload className="mx-auto h-16 w-16 text-blue-500 mb-4" />
             <h3 className="text-2xl font-medium text-gray-900 mb-2">
-              Upload Bank Statements (Debug Mode)
+              Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              This version shows detailed logs to help identify issues
+              PDF, images, and text files - now with OCR support for scanned documents!
             </p>
             
             <input
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".pdf,.txt,.csv"
+              accept=".pdf,.jpg,.jpeg,.png,.txt,.csv"
               onChange={handleFileUpload}
               className="hidden"
             />
@@ -512,10 +553,10 @@ const BankStatementProcessor = () => {
             {processing ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                Processing {files.length} files...
+                Processing with OCR...
               </>
             ) : (
-              `Debug Process ${files.length} Statement${files.length !== 1 ? 's' : ''}`
+              `Process ${files.length} Statement${files.length !== 1 ? 's' : ''}`
             )}
           </button>
         </div>
@@ -525,7 +566,7 @@ const BankStatementProcessor = () => {
           <div className="bg-white rounded-xl shadow-sm border p-6 mb-6">
             <div className="flex items-center mb-4">
               <Info className="h-5 w-5 text-blue-500 mr-2" />
-              <h3 className="text-lg font-medium text-gray-800">Debug Processing Logs</h3>
+              <h3 className="text-lg font-medium text-gray-800">Processing Logs</h3>
             </div>
             <div className="max-h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
               <div className="space-y-2">
@@ -552,18 +593,55 @@ const BankStatementProcessor = () => {
         {/* Results Section */}
         {results && (
           <div className="space-y-6">
+            
+            {/* File Processing Stats */}
+            {Object.keys(fileStats).length > 0 && (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <h3 className="text-xl font-medium text-gray-800 mb-4">📊 File Processing Statistics</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {Object.entries(fileStats).map(([fileName, stats]) => (
+                    <div key={fileName} className="bg-gray-50 rounded-lg p-4">
+                      <h4 className="font-medium text-gray-800 text-sm mb-2 truncate" title={fileName}>
+                        📄 {fileName}
+                      </h4>
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Total:</span>
+                          <span className="font-medium">{stats.total}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-green-600">✓ Categorized:</span>
+                          <span className="font-medium text-green-600">{stats.categorized}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-yellow-600">⚠ Need Review:</span>
+                          <span className="font-medium text-yellow-600">{stats.uncategorized}</span>
+                        </div>
+                        <div className="flex justify-between text-sm border-t pt-1">
+                          <span className="text-blue-600">Success Rate:</span>
+                          <span className="font-medium text-blue-600">
+                            {stats.total > 0 ? ((stats.categorized / stats.total) * 100).toFixed(1) : 0}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Main Results */}
             <div className="bg-white rounded-xl shadow-sm border p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-medium text-gray-800">
-                  📋 Results + Debug Data
+                  📋 Categorized Transactions
                 </h3>
                 <button
                   onClick={generateExcel}
                   className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
                 >
                   <Download className="h-5 w-5 mr-2" />
-                  Download Debug Report
+                  Download Complete Report
                 </button>
               </div>
               
@@ -577,28 +655,114 @@ const BankStatementProcessor = () => {
                     <p className="text-sm text-gray-600 mb-3">
                       MUR {transactions.reduce((sum, t) => sum + (t.amount || 0), 0).toLocaleString()}
                     </p>
+                    {transactions.length > 0 && (
+                      <div className="space-y-1">
+                        {transactions.slice(0, 2).map((t, i) => (
+                          <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1">
+                            {t.transactionDate}: MUR {t.amount?.toLocaleString()}
+                          </div>
+                        ))}
+                        {transactions.length > 2 && (
+                          <div className="text-xs text-gray-400">
+                            +{transactions.length - 2} more transactions
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* Uncategorized Data Alert */}
+            {uncategorizedData.length > 0 && (
+              <div className="bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-6">
+                <div className="flex items-start">
+                  <AlertCircle className="h-6 w-6 text-yellow-600 mr-3 mt-1" />
+                  <div>
+                    <h3 className="text-lg font-medium text-yellow-800 mb-2">
+                      ⚠️ {uncategorizedData.length} Transactions Need Manual Review
+                    </h3>
+                    <p className="text-yellow-700 mb-4">
+                      These transactions couldn't be automatically categorized. They're included 
+                      in your download for manual classification.
+                    </p>
+                    
+                    <div className="bg-white border rounded-lg p-4 max-h-48 overflow-y-auto">
+                      <h4 className="font-medium text-gray-800 mb-3">Preview of Uncategorized Items:</h4>
+                      <div className="space-y-2">
+                        {uncategorizedData.slice(0, 5).map((transaction, i) => (
+                          <div key={i} className="border-b pb-2">
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="font-medium text-gray-800">
+                                {transaction.transactionDate}
+                              </span>
+                              <span className="text-lg font-bold text-gray-900">
+                                MUR {transaction.amount?.toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="text-sm text-gray-600 truncate mb-1">
+                              {transaction.description}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              From: {transaction.sourceFile}
+                            </div>
+                          </div>
+                        ))}
+                        {uncategorizedData.length > 5 && (
+                          <div className="text-sm text-yellow-600 text-center pt-2">
+                            ... and {uncategorizedData.length - 5} more in the complete report
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Instructions */}
-        <div className="mt-8 bg-red-50 border border-red-200 rounded-xl p-6">
-          <h3 className="text-lg font-medium text-red-800 mb-4">🔧 DEBUG MODE ACTIVE</h3>
-          <p className="text-red-700 mb-4">
-            This version shows detailed logs to help us understand why transactions aren't being extracted.
-          </p>
-          <div className="text-sm text-red-600">
-            <p><strong>Look for these in the logs:</strong></p>
-            <ul className="list-disc list-inside mt-2 space-y-1">
-              <li>📝 First 500 chars - shows what text was extracted from PDF</li>
-              <li>📋 Sample lines - shows the actual lines being analyzed</li>
-              <li>📅 Found date line - shows lines with dates detected</li>
-              <li>📊 Lines with dates vs Valid transactions - comparison</li>
-            </ul>
+        {/* Features & Instructions */}
+        <div className="mt-8 bg-green-50 border rounded-xl p-6">
+          <h3 className="text-lg font-medium text-green-800 mb-4">🚀 Enhanced Features</h3>
+          <div className="grid md:grid-cols-2 gap-6">
+            <div>
+              <h4 className="font-medium text-green-700 mb-2">🔍 Smart Processing</h4>
+              <ul className="text-sm text-green-600 space-y-1">
+                <li>• OCR for scanned PDFs</li>
+                <li>• Text-based PDF extraction</li>
+                <li>• Image file processing</li>
+                <li>• Real-time progress tracking</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-medium text-green-700 mb-2">📊 Advanced Analysis</h4>
+              <ul className="text-sm text-green-600 space-y-1">
+                <li>• Intelligent transaction detection</li>
+                <li>• Automatic categorization</li>
+                <li>• Comprehensive reporting</li>
+                <li>• Success rate tracking</li>
+              </ul>
+            </div>
           </div>
+          
+          <div className="mt-4 p-4 bg-white border rounded-lg">
+            <h4 className="font-medium text-green-800 mb-2">📋 How it Works:</h4>
+            <ol className="text-sm text-green-700 space-y-1 list-decimal list-inside">
+              <li>Upload your bank statements (PDF, images, or text files)</li>
+              <li>System automatically detects if OCR is needed for scanned documents</li>
+              <li>Watch real-time processing logs as text is extracted and analyzed</li>
+              <li>Review categorized results and download complete Excel report</li>
+            </ol>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="text-center mt-8 py-6 border-t">
+          <p className="text-gray-600 text-sm">
+            🤖 Bank Statement Processor v3.0 - Now with OCR Support!
+          </p>
         </div>
       </div>
     </div>
