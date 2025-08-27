@@ -234,112 +234,127 @@ const BankStatementProcessor = () => {
     const lines = cleanedText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     
     // Since PDF text doesn't have proper line breaks, parse transactions directly from the text
-    addLog(`Parsing transactions from continuous text...`, 'info');
+    addLog(`Parsing transactions from continuous text using MCB-specific patterns...`, 'info');
     
     let transactionCount = 0;
     const processedTransactions = new Set();
     
-    // Use regex to find all transaction patterns in the continuous text
-    // Pattern: DD/MM/YYYY DD/MM/YYYY [amount] [balance] [description]
-    const transactionPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+([^0-9\/]+?)(?=\d{2}\/\d{2}\/\d{4}|$)/g;
+    // MCB Format: DATE DATE DESCRIPTION [DEBIT] [CREDIT] BALANCE
+    // The key insight is that MCB statements have either a DEBIT or CREDIT amount, not both
     
-    let match;
-    while ((match = transactionPattern.exec(cleanedText)) !== null) {
-      const [fullMatch, transDate, valueDate, amount, balance, description] = match;
+    // Step 1: Split text around date patterns to isolate transactions
+    const transactionChunks = cleanedText.split(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4})/);
+    
+    addLog(`Found ${Math.floor(transactionChunks.length / 2)} potential transaction chunks`, 'info');
+    
+    for (let i = 1; i < transactionChunks.length; i += 2) {
+      const datePattern = transactionChunks[i]; // Contains the date pattern
+      const transactionData = transactionChunks[i + 1] || ''; // Contains the rest of the transaction
       
-      // Clean description
-      let cleanDescription = description.trim().replace(/\s+/g, ' ');
+      // Extract dates
+      const dateMatch = datePattern.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/);
+      if (!dateMatch) continue;
       
-      // Skip headers and system text
-      if (cleanDescription.toLowerCase().includes('trans date') ||
-          cleanDescription.toLowerCase().includes('transaction details') ||
-          cleanDescription.toLowerCase().includes('statement page') ||
-          cleanDescription.toLowerCase().includes('account number') ||
-          cleanDescription.toLowerCase().includes('opening balance') ||
-          cleanDescription.toLowerCase().includes('closing balance') ||
-          cleanDescription.toLowerCase().includes('current account') ||
-          cleanDescription.length < 5) {
-        addLog(`Skipping header/system text: "${cleanDescription.substring(0, 50)}..."`, 'info');
+      const [, transDate, valueDate] = dateMatch;
+      
+      // Clean the transaction data
+      let cleanData = transactionData.trim().replace(/\s+/g, ' ');
+      
+      // Skip if it's too short or contains headers
+      if (cleanData.length < 10 || 
+          cleanData.toLowerCase().includes('trans date') ||
+          cleanData.toLowerCase().includes('transaction details') ||
+          cleanData.toLowerCase().includes('current account') ||
+          cleanData.toLowerCase().includes('statement page')) {
         continue;
       }
       
-      const transactionAmount = parseFloat(amount.replace(/,/g, ''));
-      const balanceAmount = parseFloat(balance.replace(/,/g, ''));
+      // MCB Pattern: Look for description followed by amounts and balance
+      // Pattern 1: DESCRIPTION DEBIT_AMOUNT BALANCE (when there's a debit)
+      // Pattern 2: DESCRIPTION CREDIT_AMOUNT BALANCE (when there's a credit)
+      // Pattern 3: DESCRIPTION AMOUNT BALANCE (generic)
       
-      // Validate amounts
-      if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) {
-        addLog(`Skipping invalid amounts: amount=${transactionAmount}, balance=${balanceAmount}`, 'info');
-        continue;
-      }
+      // Try to extract the balance (last number) and work backwards
+      const balanceMatch = cleanData.match(/([\d,]+\.?\d*)\s*$/);
+      if (!balanceMatch) continue;
       
-      // Create unique key
-      const transactionKey = `${transDate}-${cleanDescription.substring(0, 30)}-${transactionAmount}`;
+      const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+      if (isNaN(balance)) continue;
+      
+      // Remove the balance from the string to get description + amount
+      const withoutBalance = cleanData.replace(balanceMatch[0], '').trim();
+      
+      // Now extract the transaction amount (second-to-last number)
+      const amountMatch = withoutBalance.match(/([\d,]+\.?\d*)\s*$/);
+      if (!amountMatch) continue;
+      
+      const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+      if (isNaN(amount) || amount <= 0) continue;
+      
+      // Get the description (everything before the amount)
+      const description = withoutBalance.replace(amountMatch[0], '').trim();
+      if (description.length < 3) continue;
+      
+      // Create unique key to avoid duplicates
+      const transactionKey = `${transDate}-${description.substring(0, 50)}-${amount}`;
       
       if (processedTransactions.has(transactionKey)) {
-        addLog(`Skipping duplicate: ${transDate} - ${cleanDescription.substring(0, 30)}...`, 'info');
+        addLog(`Skipping duplicate: ${transDate} - ${description.substring(0, 30)}...`, 'info');
         continue;
       }
       
       processedTransactions.add(transactionKey);
       
-      // Determine credit vs debit
-      const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
-                      cleanDescription.toLowerCase().includes('cash cheque') ||
-                      (cleanDescription.toLowerCase().includes('interbank transfer') && 
-                       cleanDescription.toLowerCase().includes('mauritius revenue'));
+      // Determine if it's a credit or debit based on common MCB transaction types
+      const isCredit = description.toLowerCase().includes('deposit') ||
+                      description.toLowerCase().includes('cash cheque') ||
+                      (description.toLowerCase().includes('interbank transfer') && 
+                       description.toLowerCase().includes('mauritius revenue authority'));
       
       transactions.push({
         transactionDate: transDate,
         valueDate: valueDate,
-        description: cleanDescription,
-        amount: Math.abs(transactionAmount),
-        balance: Math.abs(balanceAmount),
+        description: description,
+        amount: Math.abs(amount),
+        balance: Math.abs(balance),
         sourceFile: fileName,
-        originalLine: fullMatch.trim(),
-        rawAmount: amount,
+        originalLine: `${datePattern} ${transactionData}`.trim(),
+        rawAmount: amountMatch[1],
         isDebit: !isCredit,
         isCredit: isCredit
       });
       
       transactionCount++;
-      addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${isCredit ? '(Credit)' : '(Debit)'}`, 'success');
+      addLog(`Transaction ${transactionCount}: ${transDate} - ${description.substring(0, 40)}... - MUR ${Math.abs(amount)} ${isCredit ? '(Credit)' : '(Debit)'}`, 'success');
     }
     
-    // Try alternative pattern if first one didn't work well
-    if (transactionCount < 10) {
-      addLog(`Trying alternative transaction pattern...`, 'info');
+    // Alternative approach: Use multiple specific regex patterns for different MCB transaction formats
+    if (transactionCount < 50) {
+      addLog(`Low transaction count (${transactionCount}), trying alternative regex patterns...`, 'info');
       
-      // Alternative pattern: look for sequences of date date description amount balance
-      const altPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)(?=\s+\d{2}\/\d{2}\/\d{4}|$)/g;
+      // Pattern for transactions with reference numbers
+      const refPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+([A-Z0-9\s]+)/g;
       
-      let altMatch;
-      while ((altMatch = altPattern.exec(cleanedText)) !== null) {
-        const [fullMatch, transDate, valueDate, description, amount, balance] = altMatch;
-        
-        let cleanDescription = description.trim().replace(/\s+/g, ' ');
-        
-        // Skip headers and already processed
-        if (cleanDescription.toLowerCase().includes('trans date') ||
-            cleanDescription.toLowerCase().includes('transaction details') ||
-            cleanDescription.length < 5) {
-          continue;
-        }
+      let match;
+      while ((match = refPattern.exec(cleanedText)) !== null) {
+        const [fullMatch, transDate, valueDate, description, amount, balance, reference] = match;
         
         const transactionAmount = parseFloat(amount.replace(/,/g, ''));
         const balanceAmount = parseFloat(balance.replace(/,/g, ''));
         
-        if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) {
-          continue;
-        }
+        if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) continue;
         
-        const transactionKey = `${transDate}-${cleanDescription.substring(0, 30)}-${transactionAmount}`;
+        const cleanDescription = description.trim();
+        if (cleanDescription.length < 5) continue;
+        
+        const transactionKey = `${transDate}-${cleanDescription.substring(0, 50)}-${transactionAmount}`;
         
         if (!processedTransactions.has(transactionKey)) {
           processedTransactions.add(transactionKey);
           
           const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
                          cleanDescription.toLowerCase().includes('cash cheque') ||
-                         (cleanDescription.toLowerCase().includes('interbank transfer') && 
+                         (cleanDescription.toLowerCase().includes('transfer') && 
                           cleanDescription.toLowerCase().includes('mauritius revenue'));
           
           transactions.push({
@@ -357,6 +372,50 @@ const BankStatementProcessor = () => {
           
           transactionCount++;
           addLog(`Alt Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)}`, 'success');
+        }
+      }
+      
+      // Simple pattern for basic transactions
+      const simplePattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([^0-9]+)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)/g;
+      
+      while ((match = simplePattern.exec(cleanedText)) !== null) {
+        const [fullMatch, transDate, valueDate, description, amount, balance] = match;
+        
+        const transactionAmount = parseFloat(amount.replace(/,/g, ''));
+        const balanceAmount = parseFloat(balance.replace(/,/g, ''));
+        
+        if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) continue;
+        
+        const cleanDescription = description.trim().replace(/\s+/g, ' ');
+        if (cleanDescription.length < 5 ||
+            cleanDescription.toLowerCase().includes('trans date') ||
+            cleanDescription.toLowerCase().includes('transaction details')) continue;
+        
+        const transactionKey = `${transDate}-${cleanDescription.substring(0, 50)}-${transactionAmount}`;
+        
+        if (!processedTransactions.has(transactionKey)) {
+          processedTransactions.add(transactionKey);
+          
+          const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
+                         cleanDescription.toLowerCase().includes('cash cheque') ||
+                         (cleanDescription.toLowerCase().includes('transfer') && 
+                          cleanDescription.toLowerCase().includes('mauritius revenue'));
+          
+          transactions.push({
+            transactionDate: transDate,
+            valueDate: valueDate,
+            description: cleanDescription,
+            amount: Math.abs(transactionAmount),
+            balance: Math.abs(balanceAmount),
+            sourceFile: fileName,
+            originalLine: fullMatch.trim(),
+            rawAmount: amount,
+            isDebit: !isCredit,
+            isCredit: isCredit
+          });
+          
+          transactionCount++;
+          addLog(`Simple Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)}`, 'success');
         }
       }
     }
