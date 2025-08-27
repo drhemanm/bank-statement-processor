@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign, ThumbsUp, AlertTriangle, Shield, X } from 'lucide-react';
+import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign, ThumbsUp, AlertTriangle, Shield, X, RotateCcw } from 'lucide-react';
 
 const BankStatementProcessor = () => {
   const [files, setFiles] = useState([]);
@@ -12,7 +12,16 @@ const BankStatementProcessor = () => {
   const [fileProgress, setFileProgress] = useState({});
   const [processingStats, setProcessingStats] = useState({ completed: 0, total: 0, failed: 0 });
   const [fileValidationResults, setFileValidationResults] = useState({});
+  const [flippedCards, setFlippedCards] = useState({}); // New state for card flips
   const fileInputRef = useRef(null);
+
+  // Flip card handler
+  const toggleCardFlip = (cardId) => {
+    setFlippedCards(prev => ({
+      ...prev,
+      [cardId]: !prev[cardId]
+    }));
+  };
 
   const mappingRules = {
     'Business Banking Subs Fee': 'BANK CHARGES',
@@ -79,7 +88,6 @@ const BankStatementProcessor = () => {
     'CAR': 'Transport',
     'VEHICLE': 'Transport'
   };
-
   const addLog = (message, type = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs(prev => [...prev, { message, type, timestamp }]);
@@ -145,6 +153,7 @@ const BankStatementProcessor = () => {
     setFileProgress({});
     setFileValidationResults({});
     setProcessingStats({ completed: 0, total: 0, failed: 0 });
+    setFlippedCards({}); // Reset flipped cards on new upload
     
     const initialProgress = {};
     uploadedFiles.forEach(file => {
@@ -270,7 +279,6 @@ const BankStatementProcessor = () => {
       [fileName]: { ...prev[fileName], ...updates }
     }));
   };
-
   const extractTextFromPDF = async (file) => {
     try {
       addLog(`Reading PDF: ${file.name}...`, 'info');
@@ -333,6 +341,7 @@ const BankStatementProcessor = () => {
       throw error;
     }
   };
+
   const processSingleFile = async (file) => {
     const fileName = file.name;
     
@@ -398,7 +407,6 @@ const BankStatementProcessor = () => {
       };
     }
   };
-
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
     
@@ -902,13 +910,13 @@ const BankStatementProcessor = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Fixed_Validation_Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+      a.download = `Enhanced_Flippable_Cards_Bank_Statement_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       
       URL.revokeObjectURL(url);
-      addLog('Enhanced Excel report with fixed validation downloaded!', 'success');
+      addLog('Enhanced Excel report with flippable cards downloaded!', 'success');
     });
   };
 
@@ -919,16 +927,33 @@ const BankStatementProcessor = () => {
       closingBalance: 0, 
       categories: 0, 
       categorizedCount: 0, 
-      uncategorizedCount: 0 
+      uncategorizedCount: 0,
+      creditCount: 0,
+      debitCount: 0,
+      largestTransaction: 0,
+      smallestTransaction: 0,
+      avgTransaction: 0
     };
     
     let categorizedCount = 0;
     let categories = 0;
+    let creditCount = 0;
+    let debitCount = 0;
+    let allAmounts = [];
     
     Object.entries(results).forEach(([category, transactions]) => {
       if (transactions.length > 0) {
         categorizedCount += transactions.length;
         categories++;
+        
+        transactions.forEach(t => {
+          allAmounts.push(t.amount);
+          if (t.isDebit) {
+            debitCount++;
+          } else {
+            creditCount++;
+          }
+        });
       }
     });
     
@@ -939,13 +964,22 @@ const BankStatementProcessor = () => {
     const openingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + (info.openingBalance || 0), 0);
     const closingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + (info.closingBalance || 0), 0);
     
+    const largestTransaction = allAmounts.length > 0 ? Math.max(...allAmounts) : 0;
+    const smallestTransaction = allAmounts.length > 0 ? Math.min(...allAmounts) : 0;
+    const avgTransaction = allAmounts.length > 0 ? allAmounts.reduce((sum, amt) => sum + amt, 0) / allAmounts.length : 0;
+    
     return { 
       totalTransactions, 
       openingBalance, 
       closingBalance, 
       categories,
       categorizedCount,
-      uncategorizedCount
+      uncategorizedCount,
+      creditCount,
+      debitCount,
+      largestTransaction,
+      smallestTransaction,
+      avgTransaction
     };
   };
 
@@ -963,12 +997,108 @@ const BankStatementProcessor = () => {
     return { total, valid, invalid, pending };
   };
 
-  const { totalTransactions, openingBalance, closingBalance, categories, categorizedCount, uncategorizedCount } = getBalanceStats();
+  // Enhanced Flippable Card Component
+  const FlippableCard = ({ cardId, icon: Icon, frontTitle, frontValue, frontSubtitle, backContent, color = 'blue' }) => {
+    const isFlipped = flippedCards[cardId];
+    
+    const colorClasses = {
+      blue: 'text-blue-600',
+      green: 'text-green-600',
+      yellow: 'text-yellow-600',
+      red: 'text-red-600'
+    };
+
+    const iconColorClasses = {
+      blue: 'text-blue-500',
+      green: 'text-green-500',
+      yellow: 'text-yellow-500',
+      red: 'text-red-500'
+    };
+    
+    return (
+      <div 
+        className="relative w-full h-32 cursor-pointer group"
+        style={{ perspective: '1000px' }}
+        onClick={() => toggleCardFlip(cardId)}
+      >
+        <div 
+          className={`absolute inset-0 w-full h-full transition-transform duration-700 transform-style-preserve-3d ${
+            isFlipped ? 'rotate-y-180' : ''
+          }`}
+          style={{ transformStyle: 'preserve-3d' }}
+        >
+          {/* Front Face */}
+          <div 
+            className="absolute inset-0 w-full h-full bg-white rounded-lg p-4 shadow-sm border flex items-center backface-hidden"
+            style={{ backfaceVisibility: 'hidden' }}
+          >
+            <Icon className={`h-8 w-8 ${iconColorClasses[color]} mr-3 flex-shrink-0`} />
+            <div className="flex-1 min-w-0">
+              <div className={`text-2xl font-bold ${colorClasses[color]} truncate`}>{frontValue}</div>
+              <div className="text-sm text-gray-600 truncate">{frontSubtitle}</div>
+            </div>
+            <RotateCcw className="h-4 w-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
+          
+          {/* Back Face */}
+          <div 
+            className="absolute inset-0 w-full h-full bg-white rounded-lg p-4 shadow-sm border backface-hidden"
+            style={{ 
+              backfaceVisibility: 'hidden',
+              transform: 'rotateY(180deg)'
+            }}
+          >
+            <div className="h-full flex flex-col">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="font-medium text-gray-800 text-sm">{frontTitle} Details</h4>
+                <RotateCcw className="h-4 w-4 text-gray-400" />
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                <div className="space-y-1 text-xs">
+                  {backContent.map((item, index) => (
+                    <div key={index} className="flex justify-between items-center">
+                      <span className="text-gray-600">{item.label}</span>
+                      <span className={`font-medium ${item.color || 'text-gray-800'}`}>
+                        {item.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const { 
+    totalTransactions, 
+    openingBalance, 
+    closingBalance, 
+    categories, 
+    categorizedCount, 
+    uncategorizedCount,
+    creditCount,
+    debitCount,
+    largestTransaction,
+    smallestTransaction,
+    avgTransaction
+  } = getBalanceStats();
+  
   const successRate = totalTransactions > 0 ? ((categorizedCount / totalTransactions) * 100).toFixed(1) : 0;
   const validationSummary = getValidationSummary();
+  const netChange = closingBalance - openingBalance;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+      {/* Add CSS for 3D flip effects */}
+      <style>{`
+        .rotate-y-180 { transform: rotateY(180deg); }
+        .transform-style-preserve-3d { transform-style: preserve-3d; }
+        .backface-hidden { backface-visibility: hidden; }
+      `}</style>
+      
       <div className="max-w-7xl mx-auto p-6">
         
         <div className="text-center mb-8">
@@ -979,59 +1109,91 @@ const BankStatementProcessor = () => {
             Enhanced Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with FIXED validation - No more false scanned errors for MCB statements
+            Advanced PDF processing with FLIPPABLE CARDS - Click any card to see detailed information
           </p>
         </div>
 
         {results && (
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
-            <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="flex items-center">
-                <FileText className="h-8 w-8 text-blue-500 mr-2" />
-                <div>
-                  <div className="text-2xl font-bold text-blue-600">{totalTransactions}</div>
-                  <div className="text-sm text-gray-600">Total Transactions</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="flex items-center">
-                <CheckCircle className="h-8 w-8 text-green-500 mr-2" />
-                <div>
-                  <div className="text-2xl font-bold text-green-600">{categorizedCount}</div>
-                  <div className="text-sm text-gray-600">Categorized ({successRate}%)</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="flex items-center">
-                <TrendingUp className="h-8 w-8 text-blue-500 mr-2" />
-                <div>
-                  <div className="text-2xl font-bold text-blue-600">MUR {openingBalance.toLocaleString()}</div>
-                  <div className="text-sm text-gray-600">Opening Balance</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="flex items-center">
-                <DollarSign className="h-8 w-8 text-green-500 mr-2" />
-                <div>
-                  <div className="text-2xl font-bold text-green-600">MUR {closingBalance.toLocaleString()}</div>
-                  <div className="text-sm text-gray-600">Closing Balance</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="flex items-center">
-                <AlertCircle className={`h-8 w-8 ${uncategorizedCount > 0 ? 'text-yellow-500' : 'text-green-500'} mr-2`} />
-                <div>
-                  <div className={`text-2xl font-bold ${uncategorizedCount > 0 ? 'text-yellow-600' : 'text-green-600'}`}>
-                    {uncategorizedCount}
-                  </div>
-                  <div className="text-sm text-gray-600">Need Review</div>
-                </div>
-              </div>
-            </div>
+            <FlippableCard
+              cardId="total-transactions"
+              icon={FileText}
+              frontTitle="Total Transactions"
+              frontValue={totalTransactions}
+              frontSubtitle="Total Transactions"
+              color="blue"
+              backContent={[
+                { label: 'Credits', value: creditCount, color: 'text-green-600' },
+                { label: 'Debits', value: debitCount, color: 'text-red-600' },
+                { label: 'Largest', value: `MUR ${largestTransaction.toLocaleString()}`, color: 'text-blue-600' },
+                { label: 'Smallest', value: `MUR ${smallestTransaction.toLocaleString()}`, color: 'text-gray-600' },
+                { label: 'Average', value: `MUR ${avgTransaction.toLocaleString()}`, color: 'text-purple-600' }
+              ]}
+            />
+            
+            <FlippableCard
+              cardId="categorized"
+              icon={CheckCircle}
+              frontTitle="Categorized"
+              frontValue={categorizedCount}
+              frontSubtitle={`Categorized (${successRate}%)`}
+              color="green"
+              backContent={[
+                { label: 'Success Rate', value: `${successRate}%`, color: 'text-green-600' },
+                { label: 'Categories Used', value: categories, color: 'text-blue-600' },
+                { label: 'Auto-matched', value: categorizedCount, color: 'text-green-600' },
+                { label: 'Need Review', value: uncategorizedCount, color: uncategorizedCount > 0 ? 'text-yellow-600' : 'text-green-600' },
+                { label: 'Processing', value: 'Complete', color: 'text-green-600' }
+              ]}
+            />
+            
+            <FlippableCard
+              cardId="opening-balance"
+              icon={TrendingUp}
+              frontTitle="Opening Balance"
+              frontValue={`MUR ${openingBalance.toLocaleString()}`}
+              frontSubtitle="Opening Balance"
+              color="blue"
+              backContent={[
+                { label: 'Start Amount', value: `MUR ${openingBalance.toLocaleString()}`, color: 'text-blue-600' },
+                { label: 'End Amount', value: `MUR ${closingBalance.toLocaleString()}`, color: 'text-green-600' },
+                { label: 'Net Change', value: `MUR ${netChange.toLocaleString()}`, color: netChange >= 0 ? 'text-green-600' : 'text-red-600' },
+                { label: 'Change %', value: `${openingBalance > 0 ? ((netChange / openingBalance) * 100).toFixed(1) : 0}%`, color: netChange >= 0 ? 'text-green-600' : 'text-red-600' },
+                { label: 'Status', value: netChange >= 0 ? 'Positive' : 'Negative', color: netChange >= 0 ? 'text-green-600' : 'text-red-600' }
+              ]}
+            />
+            
+            <FlippableCard
+              cardId="closing-balance"
+              icon={DollarSign}
+              frontTitle="Closing Balance"
+              frontValue={`MUR ${closingBalance.toLocaleString()}`}
+              frontSubtitle="Closing Balance"
+              color="green"
+              backContent={[
+                { label: 'Final Amount', value: `MUR ${closingBalance.toLocaleString()}`, color: 'text-green-600' },
+                { label: 'From Opening', value: `MUR ${openingBalance.toLocaleString()}`, color: 'text-blue-600' },
+                { label: 'Total Credits', value: `${creditCount} transactions`, color: 'text-green-600' },
+                { label: 'Total Debits', value: `${debitCount} transactions`, color: 'text-red-600' },
+                { label: 'Net Activity', value: `${totalTransactions} transactions`, color: 'text-blue-600' }
+              ]}
+            />
+            
+            <FlippableCard
+              cardId="need-review"
+              icon={AlertCircle}
+              frontTitle="Need Review"
+              frontValue={uncategorizedCount}
+              frontSubtitle="Need Review"
+              color={uncategorizedCount > 0 ? 'yellow' : 'green'}
+              backContent={[
+                { label: 'Uncategorized', value: uncategorizedCount, color: uncategorizedCount > 0 ? 'text-yellow-600' : 'text-green-600' },
+                { label: 'Auto-matched', value: categorizedCount, color: 'text-green-600' },
+                { label: 'Success Rate', value: `${successRate}%`, color: parseFloat(successRate) >= 90 ? 'text-green-600' : parseFloat(successRate) >= 75 ? 'text-yellow-600' : 'text-red-600' },
+                { label: 'Manual Review', value: uncategorizedCount > 0 ? 'Required' : 'None needed', color: uncategorizedCount > 0 ? 'text-yellow-600' : 'text-green-600' },
+                { label: 'Priority', value: uncategorizedCount > 10 ? 'High' : uncategorizedCount > 0 ? 'Medium' : 'Low', color: uncategorizedCount > 10 ? 'text-red-600' : uncategorizedCount > 0 ? 'text-yellow-600' : 'text-green-600' }
+              ]}
+            />
           </div>
         )}
 
@@ -1042,18 +1204,18 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF and text files supported - FIXED validation for MCB digital statements
+              PDF and text files supported - Enhanced with FLIPPABLE ANALYTICS CARDS
             </p>
             
-            <div className="bg-green-50 rounded-lg p-4 mb-6 border-l-4 border-green-400">
+            <div className="bg-purple-50 rounded-lg p-4 mb-6 border-l-4 border-purple-400">
               <div className="flex items-center justify-center mb-3">
-                <CheckCircle className="h-5 w-5 text-green-600 mr-2" />
-                <span className="text-green-800 font-medium">VALIDATION ALGORITHM FIXED</span>
+                <RotateCcw className="h-5 w-5 text-purple-600 mr-2" />
+                <span className="text-purple-800 font-medium">NEW: INTERACTIVE FLIPPABLE CARDS</span>
               </div>
-              <div className="text-sm text-green-700 space-y-1">
-                <div>• MCB and other digital bank statements now validate correctly</div>
-                <div>• Banking content prioritized over text density metrics</div>
-                <div>• No more false "scanned document" errors</div>
+              <div className="text-sm text-purple-700 space-y-1">
+                <div>• Click any analytics card above to see detailed breakdown</div>
+                <div>• 3D flip animation reveals hidden insights and statistics</div>
+                <div>• Enhanced user experience with comprehensive data visualization</div>
               </div>
             </div>
             
@@ -1299,7 +1461,7 @@ const BankStatementProcessor = () => {
 
         <div className="text-center mt-8 py-6 border-t">
           <p className="text-gray-600 text-sm">
-            Enhanced Bank Statement Processor v8.1 - Fixed Document Validation Algorithm (No More False Scanned Errors)
+            Enhanced Bank Statement Processor v9.0 - Now with Interactive Flippable Analytics Cards
           </p>
         </div>
       </div>
