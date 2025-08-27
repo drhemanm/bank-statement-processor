@@ -241,54 +241,126 @@ const BankStatementProcessor = () => {
     
     addLog(`Analyzing text from ${fileName}...`, 'info');
     
-    // Split the text into potential transaction segments
-    // Look for patterns that indicate transaction boundaries
-    const segments = text.split(/(?=\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4})/g);
+    // Debug: Show sample of extracted text
+    addLog(`📝 First 500 chars: "${text.substring(0, 500)}"`, 'info');
     
-    addLog(`Found ${segments.length} potential transaction segments`, 'info');
+    // Split the text into lines
+    const lines = text.split('\n').filter(line => line.trim().length > 10);
+    addLog(`📋 Sample lines: ${JSON.stringify(lines.slice(0, 5))}`, 'info');
     
     let transactionCount = 0;
     
-    for (let segment of segments) {
-      segment = segment.trim();
+    // More flexible date pattern - look for dates in various formats
+    const datePattern = /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})/g;
+    
+    // Look for lines that contain dates
+    lines.forEach((line, index) => {
+      const dateMatches = [...line.matchAll(datePattern)];
       
-      // Skip if too short or contains headers
-      if (segment.length < 50 || 
-          segment.includes('TRANS DATE') || 
-          segment.includes('Opening Balance') ||
-          segment.includes('Closing Balance') ||
-          segment.includes('STATEMENT Page')) {
-        continue;
-      }
-      
-      // Extract transaction pattern: DATE DATE DESCRIPTION AMOUNT BALANCE
-      const transactionPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s+(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)(?=\s|$)/g;
-      
-      let match;
-      while ((match = transactionPattern.exec(segment)) !== null) {
-        const [fullMatch, transDate, valueDate, description, amount, balance] = match;
+      if (dateMatches.length > 0) {
+        addLog(`📅 Date found: "${line.substring(0, 80)}..."`, 'info');
         
-        const transactionAmount = parseFloat(amount.replace(/,/g, ''));
-        const balanceAmount = parseFloat(balance.replace(/,/g, ''));
-        
-        if (transactionAmount > 0 && !isNaN(transactionAmount) && description.trim().length > 3) {
-          transactions.push({
-            transactionDate: transDate,
-            valueDate: valueDate,
-            description: description.trim(),
-            amount: transactionAmount,
-            balance: balanceAmount,
-            sourceFile: fileName,
-            originalLine: fullMatch
-          });
+        // Try multiple transaction patterns
+        const patterns = [
+          // Pattern 1: DATE DATE DESCRIPTION AMOUNT BALANCE
+          /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})\s+(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/,
           
-          transactionCount++;
-          addLog(`Transaction ${transactionCount}: ${transDate} - ${description.trim().substring(0, 40)}... - MUR ${transactionAmount}`, 'success');
+          // Pattern 2: DATE DESCRIPTION AMOUNT
+          /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})\s+(.+?)\s+([\d,]+\.?\d*)$/,
+          
+          // Pattern 3: More flexible - just date and numbers
+          /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})(.+?)([\d,]+\.?\d*)/
+        ];
+        
+        for (const pattern of patterns) {
+          const match = line.match(pattern);
+          if (match) {
+            let transDate, valueDate, description, amount, balance;
+            
+            if (match.length === 6) {
+              // Full pattern match
+              [, transDate, valueDate, description, amount, balance] = match;
+            } else if (match.length === 4) {
+              // Simplified pattern
+              [, transDate, description, amount] = match;
+              valueDate = transDate;
+              balance = amount; // Use amount as balance if no separate balance
+            } else if (match.length === 3) {
+              // Very basic pattern
+              [, transDate, description, amount] = match;
+              valueDate = transDate;
+              balance = amount;
+            }
+            
+            // Clean up the extracted data
+            if (description) {
+              description = description.trim().replace(/\s+/g, ' ');
+            }
+            
+            const transactionAmount = parseFloat((amount || '0').replace(/[^\d.]/g, ''));
+            const balanceAmount = parseFloat((balance || '0').replace(/[^\d.]/g, ''));
+            
+            if (transactionAmount > 0 && !isNaN(transactionAmount) && description && description.length > 3) {
+              transactions.push({
+                transactionDate: transDate,
+                valueDate: valueDate || transDate,
+                description: description,
+                amount: transactionAmount,
+                balance: balanceAmount || transactionAmount,
+                sourceFile: fileName,
+                originalLine: line
+              });
+              
+              transactionCount++;
+              addLog(`✅ Transaction ${transactionCount}: ${transDate} - ${description.substring(0, 40)}... - MUR ${transactionAmount}`, 'success');
+              break; // Found a match, don't try other patterns
+            }
+          }
         }
       }
+    });
+    
+    // If no transactions found, try a different approach
+    if (transactionCount === 0) {
+      addLog(`🔍 No transactions found with standard patterns, trying alternative parsing...`, 'info');
+      
+      // Look for any line with numbers that could be transactions
+      lines.forEach((line, index) => {
+        // Skip obvious header lines
+        if (line.toLowerCase().includes('statement') || 
+            line.toLowerCase().includes('balance') ||
+            line.toLowerCase().includes('account')) {
+          return;
+        }
+        
+        // Look for lines with both text and numbers
+        if (/[a-zA-Z]/.test(line) && /\d{1,3}[,\d]*\.?\d*/.test(line)) {
+          const amounts = line.match(/\d{1,3}[,\d]*\.?\d*/g);
+          const dates = line.match(/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}/g);
+          
+          if (amounts && amounts.length > 0) {
+            const amount = parseFloat(amounts[0].replace(/,/g, ''));
+            if (amount > 0) {
+              transactions.push({
+                transactionDate: dates ? dates[0] : new Date().toLocaleDateString('en-GB'),
+                valueDate: dates ? dates[0] : new Date().toLocaleDateString('en-GB'),
+                description: line.replace(/\d{1,3}[,\d]*\.?\d*/g, '').trim(),
+                amount: amount,
+                balance: amounts.length > 1 ? parseFloat(amounts[1].replace(/,/g, '')) : amount,
+                sourceFile: fileName,
+                originalLine: line
+              });
+              
+              transactionCount++;
+              addLog(`🔄 Alt Transaction ${transactionCount}: ${line.substring(0, 50)}... - MUR ${amount}`, 'success');
+            }
+          }
+        }
+      });
     }
     
-    addLog(`Total transactions extracted: ${transactionCount}`, 'success');
+    addLog(`📊 Summary: ${lines.filter(line => datePattern.test(line)).length} date lines, ${transactionCount} valid transactions`, 'success');
+    addLog(`✅ Final: ${transactionCount} transactions from ${fileName}`, 'success');
     return transactions;
   };
 
