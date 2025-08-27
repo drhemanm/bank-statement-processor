@@ -257,28 +257,21 @@ const BankStatementProcessor = () => {
         
         // Extract amounts and description from the remainder
         // MCB Format: DESCRIPTION AMOUNT BALANCE
-        // Key insight: Balance is always the LAST number, Transaction amount is the SECOND-TO-LAST number
         
-        // Find all numbers that look like currency amounts (have decimal or are substantial)
+        // Find all numbers in the remainder  
         const allNumbers = remainder.match(/([\d,]+\.?\d*)/g) || [];
-        const currencyNumbers = allNumbers.filter(num => {
-          const value = parseFloat(num.replace(/,/g, ''));
-          // Filter out reference numbers (usually very long) and keep currency amounts
-          return !isNaN(value) && value > 0 && (num.includes('.') || value >= 10);
-        });
         
-        if (currencyNumbers.length >= 2) {
-          // Balance is the last meaningful number
-          const balance = parseFloat(currencyNumbers[currencyNumbers.length - 1].replace(/,/g, ''));
-          // Transaction amount is the second-to-last meaningful number  
-          const amount = parseFloat(currencyNumbers[currencyNumbers.length - 2].replace(/,/g, ''));
+        if (allNumbers.length >= 2) {
+          // Get the last number as balance and second-to-last as transaction amount
+          const balance = parseFloat(allNumbers[allNumbers.length - 1].replace(/,/g, ''));
+          const amount = parseFloat(allNumbers[allNumbers.length - 2].replace(/,/g, ''));
           
-          // Get description by removing the last two currency amounts from the text
+          // Get description by removing the last two numbers from the end
           let description = remainder;
           
           // Remove the amounts from the end to get clean description
-          const balanceStr = currencyNumbers[currencyNumbers.length - 1];
-          const amountStr = currencyNumbers[currencyNumbers.length - 2];
+          const balanceStr = allNumbers[allNumbers.length - 1];
+          const amountStr = allNumbers[allNumbers.length - 2];
           
           // Remove from the rightmost occurrence
           const balanceIndex = description.lastIndexOf(balanceStr);
@@ -306,8 +299,8 @@ const BankStatementProcessor = () => {
             continue;
           }
           
-          // Validate amounts - they should be reasonable currency amounts
-          if (isNaN(amount) || amount <= 0 || isNaN(balance) || amount > 1000000 || balance > 10000000) {
+          // Basic validation - amounts should be reasonable but don't filter too aggressively
+          if (isNaN(amount) || amount <= 0 || isNaN(balance)) {
             addLog(`Skipping invalid amounts: amount=${amount}, balance=${balance}`, 'info');
             continue;
           }
