@@ -98,133 +98,128 @@ const BankStatementProcessor = () => {
         addLog('Low text content detected - switching to OCR mode...', 'info');
 
         try {
-          // Load Tesseract.js dynamically with better error handling
-          if (!window.Tesseract) {
-            addLog('Loading Tesseract OCR library...', 'info');
-            const script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js';
-            document.head.appendChild(script);
-            
-            await new Promise((resolve, reject) => {
-              script.onload = () => {
-                addLog('Tesseract OCR loaded successfully', 'success');
-                resolve();
-              };
-              script.onerror = () => reject(new Error('Failed to load Tesseract'));
-              
-              // Timeout after 30 seconds
-              setTimeout(() => reject(new Error('Tesseract loading timeout')), 30000);
-            });
-          }
+          addLog('Initializing enhanced OCR for scanned documents...', 'info');
           
-          if (!window.Tesseract || !window.Tesseract.createWorker) {
-            throw new Error('Tesseract not available');
-          }
-          
-          const { createWorker } = window.Tesseract;
-          addLog('Initializing OCR worker...', 'info');
-          const worker = await createWorker('eng');
-
+          // First try to enhance with Claude API for better OCR processing
           let ocrText = '';
-
+          
           for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-            addLog(`Converting page ${pageNum} to image for OCR...`, 'info');
+            addLog(`Converting page ${pageNum} to high-resolution image...`, 'info');
             
             try {
               const page = await pdf.getPage(pageNum);
-              const viewport = page.getViewport({ scale: 2.0 });
+              // Use higher scale for better OCR accuracy on scanned docs
+              const viewport = page.getViewport({ scale: 3.0 });
               
               const canvas = document.createElement('canvas');
               const context = canvas.getContext('2d');
               canvas.height = viewport.height;
               canvas.width = viewport.width;
               
-              await page.render({ canvasContext: context, viewport }).promise;
+              // Render with higher quality for scanned documents
+              await page.render({ 
+                canvasContext: context, 
+                viewport,
+                renderTextLayer: false,
+                renderAnnotationLayer: false
+              }).promise;
               
-              addLog(`Running OCR on page ${pageNum}...`, 'info');
-
-              // Enhanced OCR settings for financial documents
-              await worker.setParameters({
-                'tessedit_char_whitelist': '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/-:()\' ',
-                'preserve_interword_spaces': '1',
-                'tessedit_pageseg_mode': '6',
-              });
-
-              const ocrResult = await worker.recognize(canvas, {
-                logger: m => {
-                  if (m.status === 'recognizing text') {
-                    addLog(`OCR Progress: ${Math.round(m.progress * 100)}%`, 'info');
+              addLog(`Converting page ${pageNum} image to base64 for AI processing...`, 'info');
+              
+              // Convert canvas to base64 for Claude API processing
+              const imageDataUrl = canvas.toDataURL('image/png', 0.95);
+              const base64Data = imageDataUrl.split(',')[1];
+              
+              // Send to Claude API for OCR processing
+              try {
+                const response = await fetch('/api/enhance-ocr', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ 
+                    imageData: base64Data,
+                    isImage: true,
+                    pageNumber: pageNum
+                  })
+                });
+                
+                if (response.ok) {
+                  const result = await response.json();
+                  if (result.ocrText && result.ocrText.length > 0) {
+                    ocrText += result.ocrText + '\n';
+                    addLog(`AI OCR completed for page ${pageNum} - ${result.ocrText.length} chars extracted`, 'success');
+                  } else {
+                    addLog(`AI OCR returned no text for page ${pageNum}`, 'error');
                   }
+                } else {
+                  addLog(`AI OCR API failed for page ${pageNum}, trying fallback...`, 'error');
+                  
+                  // Fallback: Try browser-based OCR with better error handling
+                  await this.fallbackOCR(canvas, pageNum);
                 }
-              });
-              
-              if (ocrResult && ocrResult.data && ocrResult.data.text) {
-                ocrText += ocrResult.data.text + '\n';
-                addLog(`OCR completed for page ${pageNum} - ${ocrResult.data.text.length} chars extracted`, 'success');
-              } else {
-                addLog(`OCR returned no text for page ${pageNum}`, 'error');
+                
+              } catch (apiError) {
+                addLog(`AI OCR error for page ${pageNum}: ${apiError.message}`, 'error');
+                addLog(`Trying browser OCR fallback for page ${pageNum}...`, 'info');
+                
+                // Fallback OCR
+                const fallbackText = await this.tryBrowserOCR(canvas, pageNum);
+                if (fallbackText) {
+                  ocrText += fallbackText + '\n';
+                }
               }
               
             } catch (pageError) {
-              addLog(`OCR failed for page ${pageNum}: ${pageError.message}`, 'error');
+              addLog(`Page ${pageNum} processing failed: ${pageError.message}`, 'error');
               continue;
             }
           }
-
-          await worker.terminate();
           
           if (ocrText.trim().length > 0) {
             fullText = ocrText;
-            addLog(`OCR processing complete - ${ocrText.length} total characters extracted`, 'success');
+            addLog(`Enhanced OCR processing complete - ${ocrText.length} total characters extracted`, 'success');
           } else {
-            addLog('OCR extracted no readable text', 'error');
+            addLog('OCR extracted no readable text from scanned document', 'error');
+            addLog('This may be a low-quality scan or the document may not contain readable text', 'info');
           }
           
         } catch (ocrError) {
           addLog(`OCR processing failed: ${ocrError.message}`, 'error');
-          addLog('Continuing with direct PDF text extraction...', 'info');
+          addLog('Continuing with available PDF text...', 'info');
         }
       }
 
-      // Enhance with Claude API if available
-      try {
-        addLog('Enhancing OCR data with Claude API...', 'info');
-        
-        const response = await fetch('/api/enhance-ocr', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ocrText: fullText })
-        });
-        
-        if (response.ok) {
-          const result = await response.json();
+      // Always try Claude API enhancement, even if OCR failed
+      if (fullText.length > 0) {
+        try {
+          addLog('Enhancing extracted text with Claude API...', 'info');
           
-          // Try to parse Claude's response
-          try {
-            let cleanedData = result.enhancedData;
+          const response = await fetch('/api/enhance-ocr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              ocrText: fullText,
+              isStructuredText: true,
+              bankStatement: true
+            })
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
             
-            // Remove any markdown formatting if present
-            if (cleanedData.includes('```')) {
-              cleanedData = cleanedData.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+            if (result.enhancedText && result.enhancedText.length > fullText.length * 0.5) {
+              // Only use enhanced text if it seems reasonable
+              fullText = result.enhancedText;
+              addLog(`Claude text enhancement successful - improved text quality`, 'success');
+            } else {
+              addLog('Claude enhancement returned insufficient text, using original', 'info');
             }
-            
-            const cleanedTransactions = JSON.parse(cleanedData);
-            addLog(`Claude enhanced ${cleanedTransactions.length} transactions`, 'success');
-            
-            // Convert Claude format back to text for existing parser
-            fullText = cleanedTransactions.map(t => 
-              `${t.date} ${t.date} ${t.description} ${t.amount} ${t.amount}`
-            ).join('\n');
-            
-          } catch (parseError) {
-            addLog('Claude response parsing failed, using original OCR...', 'error');
+          } else {
+            addLog('Claude text enhancement unavailable, using original text', 'info');
           }
-        } else {
-          addLog('Claude API unavailable, using original OCR...', 'error');
+          
+        } catch (error) {
+          addLog('Claude text enhancement failed, using original text', 'info');
         }
-        
-      } catch (error) {
-        addLog('Claude API failed, using original OCR...', 'error');
       }
       
       addLog(`PDF text extraction complete - ${fullText.length} total characters`, 'success');
