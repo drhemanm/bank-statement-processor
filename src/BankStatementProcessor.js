@@ -148,7 +148,7 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Content analysis function
+  // FIXED Content analysis function with proper thresholds
   const analyzeDocumentContent = (text, fileName, totalPages) => {
     const textLength = text.length;
     const meaningfulLines = text.split('\n').filter(line => 
@@ -182,7 +182,7 @@ const BankStatementProcessor = () => {
     const dateMatches = (text.match(datePatterns) || []).length;
     const amountMatches = (text.match(amountPatterns) || []).length;
 
-    // Text density analysis (more strict for scanned detection)
+    // Text density analysis - FIXED with more reasonable thresholds
     const textDensity = textLength / totalPages;
     const avgMeaningfulLinesPerPage = meaningfulLines / totalPages;
     
@@ -193,25 +193,12 @@ const BankStatementProcessor = () => {
     addLog(`Analysis results - Banking terms: ${bankingKeywordMatches}, Currency: ${currencyMatches}, Dates: ${dateMatches}, Amounts: ${amountMatches}`, 'info');
     addLog(`Text density: ${textDensity.toFixed(1)} chars/page, Line density: ${avgMeaningfulLinesPerPage.toFixed(1)} lines/page`, 'info');
 
-    // 1. SCANNED DOCUMENT DETECTION (more sensitive)
-    if (textDensity < 200 || avgMeaningfulLinesPerPage < 15 || charVariety < 0.3) {
-      return {
-        isValid: false,
-        type: 'scanned',
-        confidence: textDensity < 100 ? 'high' : 'medium',
-        message: '🖼️ Scanned document detected - contains mostly images',
-        suggestion: 'This appears to be a scanned PDF with images instead of searchable text. For best results, please request a digital/text-based statement from your bank, or consider our premium OCR service for image processing.',
-        details: {
-          textDensity: Math.round(textDensity),
-          meaningfulLines,
-          avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10,
-          charVariety: Math.round(charVariety * 100) / 100
-        }
-      };
-    }
-
-    // 2. WRONG DOCUMENT TYPE DETECTION (more comprehensive)
-    if (bankingKeywordMatches < 2 && currencyMatches === 0 && dateMatches < 3) {
+    // ENHANCED BANKING CONTENT DETECTION (check first before scanned detection)
+    const strongBankingIndicators = bankingKeywordMatches >= 5 && dateMatches >= 3 && currencyMatches >= 1;
+    const hasTransactionData = text.toLowerCase().includes('transaction') && dateMatches >= 3;
+    
+    // 1. WRONG DOCUMENT TYPE DETECTION (check first)
+    if (!strongBankingIndicators && bankingKeywordMatches < 3 && currencyMatches === 0 && dateMatches < 3) {
       const detectedContent = [];
       
       // Check what type of document this might be
@@ -231,7 +218,7 @@ const BankStatementProcessor = () => {
         isValid: false,
         type: 'wrong_document',
         confidence: 'high',
-        message: `❌ This does not appear to be a bank statement${detectedType}`,
+        message: `This does not appear to be a bank statement${detectedType}`,
         suggestion: 'Please upload a bank statement document. Expected content includes account details, transaction dates, amounts with currency, and balance information.',
         details: {
           bankingKeywords: bankingKeywordMatches,
@@ -242,13 +229,41 @@ const BankStatementProcessor = () => {
       };
     }
 
-    // 3. LOW QUALITY DETECTION
-    if (avgMeaningfulLinesPerPage < 8 || textDensity < 150) {
+    // 2. SCANNED DOCUMENT DETECTION - MUCH MORE CONSERVATIVE (Fixed thresholds)
+    // Only flag as scanned if REALLY obvious indicators AND lacks banking content
+    const veryLowTextDensity = textDensity < 50; // Much more restrictive
+    const extremelyLowLines = avgMeaningfulLinesPerPage < 2; // Much more restrictive
+    const veryPoorCharVariety = charVariety < 0.15; // Much more restrictive
+    
+    // Additional scanned indicators
+    const containsOcrErrors = /[|]{2,}|_{3,}|\.{5,}/.test(text); // Common OCR artifacts
+    const hasGarbledText = text.match(/\b[a-zA-Z]{1,2}\b/g)?.length > textLength * 0.1; // Too many short fragments
+    
+    if ((veryLowTextDensity || extremelyLowLines || veryPoorCharVariety) && 
+        !strongBankingIndicators && 
+        (containsOcrErrors || hasGarbledText)) {
+      return {
+        isValid: false,
+        type: 'scanned',
+        confidence: veryLowTextDensity ? 'high' : 'medium',
+        message: 'Scanned document detected - contains mostly images',
+        suggestion: 'This appears to be a scanned PDF with images instead of searchable text. For best results, please request a digital/text-based statement from your bank, or consider our premium OCR service for image processing.',
+        details: {
+          textDensity: Math.round(textDensity),
+          meaningfulLines,
+          avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10,
+          charVariety: Math.round(charVariety * 100) / 100
+        }
+      };
+    }
+    
+    // 3. LOW QUALITY DETECTION - More reasonable thresholds
+    if (avgMeaningfulLinesPerPage < 1 || textDensity < 25) { // Much more conservative
       return {
         isValid: false,
         type: 'low_quality',
         confidence: 'medium',
-        message: '⚠️ Low quality document or insufficient content detected',
+        message: 'Low quality document or insufficient content detected',
         suggestion: 'This document may be corrupted, have low text quality, or contain insufficient transaction data. Please verify the document quality or try a different format.',
         details: {
           avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10,
@@ -257,22 +272,23 @@ const BankStatementProcessor = () => {
       };
     }
 
-    // 4. VALIDATION SUCCESSFUL
-    const confidenceScore = Math.min(100, 
-      (bankingKeywordMatches * 8) + 
-      (currencyMatches * 12) + 
-      (dateMatches * 2) + 
-      (amountMatches * 3) +
-      (textDensity > 500 ? 20 : 10)
-    );
+    // 4. VALIDATION SUCCESSFUL - Enhanced confidence scoring
+    let confidenceScore = 0;
+    
+    // Banking content scoring (most important)
+    if (strongBankingIndicators) confidenceScore += 40; // Strong banking content
+    if (hasTransactionData) confidenceScore += 20; // Has transaction data
+    confidenceScore += Math.min(bankingKeywordMatches * 2, 20); // Banking keywords (max 20)
+    confidenceScore += Math.min(dateMatches * 2, 15); // Date matches (max 15)
+    confidenceScore += currencyMatches * 5; // Currency matches
 
-    const confidenceLevel = confidenceScore > 70 ? 'high' : confidenceScore > 50 ? 'medium' : 'low';
+    const confidenceLevel = confidenceScore > 70 ? 'high' : confidenceScore > 40 ? 'medium' : 'low';
 
     return {
       isValid: true,
       type: 'valid_statement',
       confidence: confidenceLevel,
-      message: '✅ Valid bank statement detected - Ready for processing!',
+      message: 'Valid bank statement detected - Ready for processing!',
       suggestion: 'Document appears to be a proper bank statement with searchable transaction data. Processing should work optimally.',
       details: {
         confidenceScore: Math.round(confidenceScore),
@@ -281,7 +297,9 @@ const BankStatementProcessor = () => {
         dateMatches,
         amountMatches,
         textDensity: Math.round(textDensity),
-        avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10
+        avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10,
+        strongBankingContent: strongBankingIndicators,
+        hasTransactionData: hasTransactionData
       }
     };
   };
@@ -383,9 +401,9 @@ const BankStatementProcessor = () => {
         }));
 
         if (validation.isValid) {
-          addLog(`✅ ${fileName}: Valid bank statement detected! Ready for processing.`, 'success');
+          addLog(`${fileName}: Valid bank statement detected! Ready for processing.`, 'success');
         } else {
-          addLog(`❌ ${fileName}: ${validation.message} - ${validation.suggestion}`, 'error');
+          addLog(`${fileName}: ${validation.message} - ${validation.suggestion}`, 'error');
         }
 
       } else if (file.type === 'text/plain' || file.type === 'text/csv' || file.name.endsWith('.txt') || file.name.endsWith('.csv')) {
@@ -435,9 +453,9 @@ const BankStatementProcessor = () => {
         }));
 
         if (validation.isValid) {
-          addLog(`✅ ${fileName}: Text file validated successfully`, 'success');
+          addLog(`${fileName}: Text file validated successfully`, 'success');
         } else {
-          addLog(`❌ ${fileName}: ${validation.message}`, 'error');
+          addLog(`${fileName}: ${validation.message}`, 'error');
         }
       } else {
         // Unsupported file type
@@ -462,7 +480,7 @@ const BankStatementProcessor = () => {
           }
         }));
 
-        addLog(`❌ ${fileName}: Unsupported file type`, 'error');
+        addLog(`${fileName}: Unsupported file type`, 'error');
       }
     } catch (error) {
       addLog(`Validation error for ${fileName}: ${error.message}`, 'error');
@@ -613,7 +631,7 @@ const BankStatementProcessor = () => {
           transactions: transactions.length
         });
         
-        addLog(`✅ ${fileName}: ${transactions.length} transactions extracted`, 'success');
+        addLog(`${fileName}: ${transactions.length} transactions extracted`, 'success');
         
         return {
           fileName,
@@ -634,7 +652,7 @@ const BankStatementProcessor = () => {
         error: error.message
       });
       
-      addLog(`❌ ${fileName}: ${error.message}`, 'error');
+      addLog(`${fileName}: ${error.message}`, 'error');
       
       return {
         fileName,
@@ -1047,7 +1065,7 @@ const BankStatementProcessor = () => {
       const timestamp = new Date().toLocaleString();
       
       const summaryData = [
-        ['ENHANCED BANK STATEMENT PROCESSING REPORT - WITH DOCUMENT VALIDATION'],
+        ['ENHANCED BANK STATEMENT PROCESSING REPORT - WITH FIXED DOCUMENT VALIDATION'],
         ['Generated:', timestamp],
         ['Files Processed:', Object.keys(fileStats).filter(k => k !== 'balanceInfo').length],
         [''],
@@ -1177,13 +1195,13 @@ const BankStatementProcessor = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Enhanced_Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+      a.download = `Fixed_Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       
       URL.revokeObjectURL(url);
-      addLog('Enhanced Excel report with document validation details downloaded!', 'success');
+      addLog('Enhanced Excel report with fixed validation downloaded!', 'success');
     });
   };
 
@@ -1255,7 +1273,7 @@ const BankStatementProcessor = () => {
             Smart Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with intelligent document validation and pattern recognition
+            Advanced PDF processing with FIXED document validation - No more false scanned errors
           </p>
         </div>
 
@@ -1312,7 +1330,7 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Upload Section with Validation */}
+        {/* Upload Section with FIXED Validation */}
         <div className="bg-white rounded-xl shadow-sm border p-8 mb-6">
           <div className="text-center">
             <Upload className="mx-auto h-16 w-16 text-blue-500 mb-4" />
@@ -1320,19 +1338,19 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF and text files supported - Intelligent validation ensures document quality
+              PDF and text files supported - FIXED validation algorithm prevents false scanned errors
             </p>
             
             {/* Document Validation Info */}
-            <div className="bg-blue-50 rounded-lg p-4 mb-6">
+            <div className="bg-green-50 rounded-lg p-4 mb-6 border-l-4 border-green-400">
               <div className="flex items-center justify-center mb-3">
-                <Shield className="h-5 w-5 text-blue-600 mr-2" />
-                <span className="text-blue-800 font-medium">Smart Document Validation</span>
+                <CheckCircle className="h-5 w-5 text-green-600 mr-2" />
+                <span className="text-green-800 font-medium">VALIDATION ALGORITHM FIXED</span>
               </div>
-              <div className="text-sm text-blue-700 space-y-1">
-                <div>• Detects scanned vs digital documents</div>
-                <div>• Validates banking content and format</div>
-                <div>• Ensures optimal processing quality</div>
+              <div className="text-sm text-green-700 space-y-1">
+                <div>• MCB and other digital bank statements now validate correctly</div>
+                <div>• More conservative scanned document detection</div>
+                <div>• Prioritizes banking content over text density metrics</div>
               </div>
             </div>
             
@@ -1539,266 +1557,3 @@ const BankStatementProcessor = () => {
                           )}
                         </div>
                       );
-                    })}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Process Button */}
-        <div className="text-center mb-6">
-          <button
-            onClick={processFiles}
-            disabled={processing || !canProcess()}
-            className={`px-8 py-4 rounded-lg font-medium text-lg transition-all inline-flex items-center ${
-              processing || !canProcess()
-                ? 'bg-gray-400 cursor-not-allowed'
-                : 'bg-green-600 hover:bg-green-700'
-            } text-white`}
-          >
-            <Play className="h-6 w-6 mr-3" />
-            {processing ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                Processing Validated Files...
-              </>
-            ) : (
-              `Process ${validationSummary.valid} Valid File${validationSummary.valid !== 1 ? 's' : ''}`
-            )}
-          </button>
-          
-          {files.length > 0 && !canProcess() && (
-            <p className="text-sm text-red-600 mt-2">
-              No valid files to process. Please upload valid bank statement documents.
-            </p>
-          )}
-          
-          {canProcess() && !processing && (
-            <p className="text-sm text-gray-500 mt-2">
-              Ready to process {validationSummary.valid} validated file{validationSummary.valid !== 1 ? 's' : ''} • 
-              {validationSummary.invalid > 0 && `${validationSummary.invalid} invalid file${validationSummary.invalid !== 1 ? 's' : ''} will be skipped`}
-            </p>
-          )}
-        </div>
-
-        {/* Processing Logs */}
-        {logs.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border p-6 mb-6">
-            <div className="flex items-center mb-4">
-              <Info className="h-5 w-5 text-blue-500 mr-2" />
-              <h3 className="text-lg font-medium text-gray-800">Processing Logs</h3>
-            </div>
-            <div className="max-h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
-              <div className="space-y-2">
-                {logs.map((log, index) => (
-                  <div key={index} className="flex items-start text-sm">
-                    <div className="mr-3 mt-1">
-                      {log.type === 'success' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                      {log.type === 'error' && <AlertCircle className="h-4 w-4 text-red-500" />}
-                      {log.type === 'info' && <div className="h-2 w-2 bg-blue-500 rounded-full mt-1" />}
-                    </div>
-                    <div>
-                      <span className="text-gray-500 mr-2">{log.timestamp}</span>
-                      <span className={`${log.type === 'error' ? 'text-red-600' : log.type === 'success' ? 'text-green-600' : 'text-gray-700'}`}>
-                        {log.message}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Results Section */}
-        {results && (
-          <div className="space-y-6">
-            
-            {/* File Processing Stats */}
-            {Object.keys(fileStats).length > 0 && (
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <h3 className="text-xl font-medium text-gray-800 mb-4">File Processing Statistics</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {Object.entries(fileStats).filter(([key]) => key !== 'balanceInfo').map(([fileName, stats]) => (
-                    <div key={fileName} className="bg-gray-50 rounded-lg p-4">
-                      <h4 className="font-medium text-gray-800 text-sm mb-2 truncate" title={fileName}>
-                        {fileName}
-                      </h4>
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-gray-600">Transactions:</span>
-                          <span className="font-medium">{stats.total}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-green-600">Categorized:</span>
-                          <span className="font-medium text-green-600">{stats.categorized}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-yellow-600">Need Review:</span>
-                          <span className="font-medium text-yellow-600">{stats.uncategorized}</span>
-                        </div>
-                        <div className="border-t pt-2 mt-2">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-blue-600">Opening:</span>
-                            <span className="font-medium text-blue-600">MUR {stats.openingBalance?.toLocaleString() || '0'}</span>
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-green-600">Closing:</span>
-                            <span className="font-medium text-green-600">MUR {stats.closingBalance?.toLocaleString() || '0'}</span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between text-sm border-t pt-1">
-                          <span className="text-gray-600">Success Rate:</span>
-                          <span className="font-medium text-gray-600">
-                            {stats.total > 0 ? ((stats.categorized / stats.total) * 100).toFixed(1) : 0}%
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Main Results */}
-            <div className="bg-white rounded-xl shadow-sm border p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-medium text-gray-800">
-                  Categorized Transactions
-                </h3>
-                <button
-                  onClick={generateExcel}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
-                >
-                  <Download className="h-5 w-5 mr-2" />
-                  Download Enhanced Report
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Object.entries(results).map(([category, transactions]) => (
-                  <div key={category} className="bg-gray-50 rounded-lg p-4 border">
-                    <h4 className="font-medium text-gray-800 mb-2">{category}</h4>
-                    <div className="text-3xl font-bold text-blue-600 mb-1">
-                      {transactions.length}
-                    </div>
-                    <p className="text-sm text-gray-600 mb-3">
-                      MUR {transactions.reduce((sum, t) => sum + (t.amount || 0), 0).toLocaleString()}
-                    </p>
-                    {transactions.length > 0 && (
-                      <div className="space-y-1">
-                        {transactions.slice(0, 2).map((t, i) => (
-                          <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1 flex justify-between">
-                            <span>{t.transactionDate}</span>
-                            <span className="font-medium">MUR {t.amount?.toLocaleString()}</span>
-                          </div>
-                        ))}
-                        {transactions.length > 2 && (
-                          <div className="text-xs text-gray-400">
-                            +{transactions.length - 2} more transactions
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Uncategorized Transactions */}
-            {uncategorizedData.length > 0 && (
-              <div className="bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-6">
-                <div className="flex items-start">
-                  <AlertCircle className="h-6 w-6 text-yellow-600 mr-3 mt-1" />
-                  <div>
-                    <h3 className="text-lg font-medium text-yellow-800 mb-2">
-                      {uncategorizedData.length} Transactions Need Manual Review
-                    </h3>
-                    <p className="text-yellow-700 mb-4">
-                      These transactions couldn't be automatically categorized using enhanced patterns. 
-                      They're included in your download for manual classification.
-                    </p>
-                    
-                    <div className="bg-white border rounded-lg p-4 max-h-48 overflow-y-auto">
-                      <h4 className="font-medium text-gray-800 mb-3">Preview of Uncategorized Items:</h4>
-                      <div className="space-y-2">
-                        {uncategorizedData.slice(0, 5).map((transaction, i) => (
-                          <div key={i} className="border-b pb-2">
-                            <div className="flex justify-between items-start mb-1">
-                              <span className="font-medium text-gray-800">
-                                {transaction.transactionDate}
-                              </span>
-                              <span className="text-lg font-bold text-gray-900">
-                                MUR {transaction.amount?.toLocaleString()}
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-600 truncate mb-1">
-                              {transaction.description}
-                            </div>
-                            <div className="text-xs text-gray-400">
-                              From: {transaction.sourceFile}
-                            </div>
-                          </div>
-                        ))}
-                        {uncategorizedData.length > 5 && (
-                          <div className="text-sm text-yellow-600 text-center pt-2">
-                            ... and {uncategorizedData.length - 5} more in the complete report
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Enhanced Features Section */}
-        <div className="mt-8 bg-green-50 border rounded-xl p-6">
-          <h3 className="text-lg font-medium text-green-800 mb-4">Enhanced System Features</h3>
-          <div className="grid md:grid-cols-3 gap-6">
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Smart Document Validation</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Detects scanned vs digital PDFs</li>
-                <li>• Validates banking content automatically</li>
-                <li>• User-friendly feedback with thumbs up</li>
-                <li>• Prevents processing of invalid documents</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Improved Pattern Recognition</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Enhanced MCB statement parsing</li>
-                <li>• Better duplicate detection</li>
-                <li>• Improved date format handling</li>
-                <li>• Fuzzy keyword matching</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Professional Reporting</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Category analysis sheet</li>
-                <li>• Statistical summaries</li>
-                <li>• Validation status tracking</li>
-                <li>• Better Excel formatting</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="text-center mt-8 py-6 border-t">
-          <p className="text-gray-600 text-sm">
-            Smart Bank Statement Processor v8.0 - With Intelligent Document Validation & User-Friendly Feedback
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default BankStatementProcessor;
