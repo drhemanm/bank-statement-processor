@@ -9,20 +9,8 @@ const BankStatementProcessor = () => {
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
   const [combinePDFs, setCombinePDFs] = useState(false);
-  const [fileProgress, setFileProgress] = useState({});
+  const [fileProgress, setFileProgress] = useState({}); // Track progress per file
   const [processingStats, setProcessingStats] = useState({ completed: 0, total: 0, failed: 0 });
-  const [showSessionDialog, setShowSessionDialog] = useState(false);
-  const [pendingFiles, setPendingFiles] = useState([]);
-  
-  // Session management for incremental processing
-  const [sessionData, setSessionData] = useState({
-    hasExistingData: false,
-    processedFiles: [],
-    allTransactions: [],
-    sessionStats: {},
-    sessionBalances: {}
-  });
-  
   const fileInputRef = useRef(null);
 
   // Enhanced mapping rules with more MCB-specific patterns
@@ -114,27 +102,11 @@ const BankStatementProcessor = () => {
 
   const handleFileUpload = (event) => {
     const uploadedFiles = Array.from(event.target.files);
-    
-    // Check if we have existing processed data
-    if (sessionData.hasExistingData && uploadedFiles.length > 0) {
-      // Show dialog to ask user preference
-      setPendingFiles(uploadedFiles);
-      setShowSessionDialog(true);
-      return;
-    }
-    
-    // No existing data or no files, proceed normally
-    processNewFiles(uploadedFiles, false);
-  };
-
-  const processNewFiles = (uploadedFiles, appendToSession = false) => {
-    if (!appendToSession) {
-      // Clear previous session
-      clearSession();
-    }
-    
     setFiles(uploadedFiles);
-    setLogs(prev => appendToSession ? [...prev] : []);
+    setLogs([]);
+    setResults(null);
+    setUncategorizedData([]);
+    setFileStats({});
     setFileProgress({});
     setProcessingStats({ completed: 0, total: 0, failed: 0 });
     
@@ -150,26 +122,7 @@ const BankStatementProcessor = () => {
     });
     setFileProgress(initialProgress);
     
-    addLog(`${uploadedFiles.length} file(s) uploaded ${appendToSession ? '(adding to existing session)' : '(new session)'}`, 'success');
-  };
-
-  const clearSession = () => {
-    setResults(null);
-    setUncategorizedData([]);
-    setFileStats({});
-    setSessionData({
-      hasExistingData: false,
-      processedFiles: [],
-      allTransactions: [],
-      sessionStats: {},
-      sessionBalances: {}
-    });
-  };
-
-  const handleSessionChoice = (addToExisting) => {
-    setShowSessionDialog(false);
-    processNewFiles(pendingFiles, addToExisting);
-    setPendingFiles([]);
+    addLog(`${uploadedFiles.length} file(s) uploaded successfully`, 'success');
   };
 
   const removeFile = (indexToRemove) => {
@@ -189,114 +142,6 @@ const BankStatementProcessor = () => {
       ...prev,
       [fileName]: { ...prev[fileName], ...updates }
     }));
-  };
-
-  // Check for duplicate transactions across sessions
-  const findDuplicateTransactions = (newTransactions, existingTransactions) => {
-    const duplicates = [];
-    
-    newTransactions.forEach(newTx => {
-      const duplicate = existingTransactions.find(existingTx => 
-        existingTx.transactionDate === newTx.transactionDate &&
-        existingTx.description === newTx.description &&
-        Math.abs(existingTx.amount - newTx.amount) < 0.01 &&
-        existingTx.sourceFile !== newTx.sourceFile // Different files
-      );
-      
-      if (duplicate) {
-        duplicates.push({
-          newTransaction: newTx,
-          existingTransaction: duplicate
-        });
-      }
-    });
-    
-    return duplicates;
-  };
-
-  // Validate date ranges for continuity
-  const validateDateContinuity = (newTransactions, existingTransactions) => {
-    if (existingTransactions.length === 0) return { valid: true, warnings: [] };
-    
-    const warnings = [];
-    
-    // Get date ranges
-    const existingDates = existingTransactions.map(tx => new Date(tx.transactionDate.split('/').reverse().join('-')));
-    const newDates = newTransactions.map(tx => new Date(tx.transactionDate.split('/').reverse().join('-')));
-    
-    const existingMin = new Date(Math.min(...existingDates));
-    const existingMax = new Date(Math.max(...existingDates));
-    const newMin = new Date(Math.min(...newDates));
-    const newMax = new Date(Math.max(...newDates));
-    
-    // Check for overlapping date ranges
-    if (newMin <= existingMax && newMax >= existingMin) {
-      warnings.push(`Date ranges overlap: Existing (${existingMin.toDateString()} - ${existingMax.toDateString()}) vs New (${newMin.toDateString()} - ${newMax.toDateString()})`);
-    }
-    
-    return { valid: true, warnings };
-  };
-
-  // Process single file with progress tracking
-  const processSingleFile = async (file) => {
-    const fileName = file.name;
-    
-    try {
-      updateFileProgress(fileName, { status: 'processing', progress: 10 });
-      addLog(`Starting ${fileName}...`, 'info');
-
-      let extractedText = '';
-      
-      if (file.type === 'application/pdf') {
-        updateFileProgress(fileName, { status: 'extracting', progress: 30 });
-        extractedText = await extractTextFromPDF(file);
-      } else {
-        updateFileProgress(fileName, { status: 'reading', progress: 30 });
-        extractedText = await file.text();
-        addLog(`Text file processed: ${fileName}`, 'success');
-      }
-
-      if (extractedText) {
-        updateFileProgress(fileName, { status: 'analyzing', progress: 60 });
-        const transactions = extractTransactionsFromText(extractedText, fileName);
-        
-        updateFileProgress(fileName, { 
-          status: 'completed', 
-          progress: 100,
-          transactions: transactions.length
-        });
-        
-        addLog(`✅ ${fileName}: ${transactions.length} transactions extracted`, 'success');
-        
-        return {
-          fileName,
-          transactions,
-          balanceInfo: {
-            openingBalance: transactions.openingBalance || 0,
-            closingBalance: transactions.closingBalance || 0
-          },
-          success: true
-        };
-      } else {
-        throw new Error('No text extracted from file');
-      }
-    } catch (error) {
-      updateFileProgress(fileName, { 
-        status: 'failed', 
-        progress: 0,
-        error: error.message
-      });
-      
-      addLog(`❌ ${fileName}: ${error.message}`, 'error');
-      
-      return {
-        fileName,
-        transactions: [],
-        balanceInfo: { openingBalance: 0, closingBalance: 0 },
-        success: false,
-        error: error.message
-      };
-    }
   };
 
   // Enhanced PDF text extraction (keeping original logic intact)
@@ -364,7 +209,67 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Enhanced transaction extraction with improved patterns
+  // Process single file with progress tracking
+  const processSingleFile = async (file) => {
+    const fileName = file.name;
+    
+    try {
+      updateFileProgress(fileName, { status: 'processing', progress: 10 });
+      addLog(`Starting ${fileName}...`, 'info');
+
+      let extractedText = '';
+      
+      if (file.type === 'application/pdf') {
+        updateFileProgress(fileName, { status: 'extracting', progress: 30 });
+        extractedText = await extractTextFromPDF(file);
+      } else {
+        updateFileProgress(fileName, { status: 'reading', progress: 30 });
+        extractedText = await file.text();
+        addLog(`Text file processed: ${fileName}`, 'success');
+      }
+
+      if (extractedText) {
+        updateFileProgress(fileName, { status: 'analyzing', progress: 60 });
+        const transactions = extractTransactionsFromText(extractedText, fileName);
+        
+        updateFileProgress(fileName, { 
+          status: 'completed', 
+          progress: 100,
+          transactions: transactions.length
+        });
+        
+        addLog(`✅ ${fileName}: ${transactions.length} transactions extracted`, 'success');
+        
+        return {
+          fileName,
+          transactions,
+          balanceInfo: {
+            openingBalance: transactions.openingBalance || 0,
+            closingBalance: transactions.closingBalance || 0
+          },
+          success: true
+        };
+      } else {
+        throw new Error('No text extracted from file');
+      }
+    } catch (error) {
+      updateFileProgress(fileName, { 
+        status: 'failed', 
+        progress: 0,
+        error: error.message
+      });
+      
+      addLog(`❌ ${fileName}: ${error.message}`, 'error');
+      
+      return {
+        fileName,
+        transactions: [],
+        balanceInfo: { openingBalance: 0, closingBalance: 0 },
+        success: false,
+        error: error.message
+      };
+    }
+  };
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
     
@@ -376,7 +281,7 @@ const BankStatementProcessor = () => {
     addLog(`Opening Balance: MUR ${openingBalance.toLocaleString()}`, 'success');
     addLog(`Closing Balance: MUR ${closingBalance.toLocaleString()}`, 'success');
     
-    // Enhanced patterns for MCB statements
+      // Enhanced patterns for MCB statements
     const mcbPattern1 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
     
     // Pattern 2: Alternative format with negative amounts: DD/MM/YYYY DD/MM/YYYY -AMOUNT BALANCE DESCRIPTION
@@ -611,7 +516,7 @@ const BankStatementProcessor = () => {
     return { category: 'UNCATEGORIZED', matched: false, keyword: null, confidence: 'none' };
   };
 
-  // Enhanced parallel processing with session management
+  // Enhanced parallel processing
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('Please upload files first', 'error');
@@ -619,15 +524,16 @@ const BankStatementProcessor = () => {
     }
 
     setProcessing(true);
+    setResults(null);
+    setUncategorizedData([]);
+    setFileStats({});
     setProcessingStats({ completed: 0, total: files.length, failed: 0 });
     
-    const isAppendingToSession = sessionData.hasExistingData;
-    
-    addLog(`Starting ${isAppendingToSession ? 'incremental' : 'parallel'} processing of ${files.length} files...`, 'info');
+    addLog(`Starting parallel processing of ${files.length} files...`, 'info');
 
     try {
-      // Process files in parallel
-      const concurrencyLimit = 3;
+      // Process files in parallel with concurrency limit
+      const concurrencyLimit = 3; // Process max 3 files simultaneously
       const results = [];
       
       for (let i = 0; i < files.length; i += concurrencyLimit) {
@@ -639,6 +545,7 @@ const BankStatementProcessor = () => {
         const batchResults = await Promise.all(batchPromises);
         results.push(...batchResults);
         
+        // Update overall progress
         setProcessingStats(prev => ({
           ...prev,
           completed: results.length,
@@ -646,40 +553,16 @@ const BankStatementProcessor = () => {
         }));
       }
 
-      // Combine new results with existing session data
-      const newTransactions = results.filter(r => r.success).flatMap(r => r.transactions);
-      const existingTransactions = sessionData.allTransactions || [];
-      
-      // Data validation and duplicate detection
-      if (isAppendingToSession && newTransactions.length > 0) {
-        addLog('Validating data consistency with existing session...', 'info');
-        
-        // Check for duplicates
-        const duplicates = findDuplicateTransactions(newTransactions, existingTransactions);
-        if (duplicates.length > 0) {
-          addLog(`Warning: Found ${duplicates.length} potential duplicate transactions`, 'error');
-          duplicates.slice(0, 3).forEach(dup => {
-            addLog(`Duplicate: ${dup.newTransaction.transactionDate} - ${dup.newTransaction.description.substring(0, 30)}...`, 'error');
-          });
-        }
-        
-        // Validate date continuity
-        const dateValidation = validateDateContinuity(newTransactions, existingTransactions);
-        dateValidation.warnings.forEach(warning => {
-          addLog(`Date Warning: ${warning}`, 'error');
-        });
-      }
-
-      // Merge all transactions
-      const allTransactions = [...existingTransactions, ...newTransactions];
-      
-      // Build comprehensive stats
-      const stats = { ...sessionData.sessionStats };
-      const balanceInfo = { ...sessionData.sessionBalances };
+      // Combine all results
+      const allTransactions = [];
+      const stats = {};
+      const balanceInfo = {};
       let totalFailed = 0;
 
       results.forEach(result => {
         if (result.success) {
+          allTransactions.push(...result.transactions);
+          
           balanceInfo[result.fileName] = result.balanceInfo;
           
           stats[result.fileName] = {
@@ -688,8 +571,7 @@ const BankStatementProcessor = () => {
             uncategorized: 0,
             openingBalance: result.balanceInfo.openingBalance,
             closingBalance: result.balanceInfo.closingBalance,
-            status: 'success',
-            processedAt: new Date().toISOString()
+            status: 'success'
           };
         } else {
           totalFailed++;
@@ -700,15 +582,14 @@ const BankStatementProcessor = () => {
             openingBalance: 0,
             closingBalance: 0,
             status: 'failed',
-            error: result.error,
-            processedAt: new Date().toISOString()
+            error: result.error
           };
         }
       });
 
       setFileStats({...stats, balanceInfo});
 
-      // Process categorization for all transactions
+      // Process categorization
       const categorizedData = {
         'SALES': [],
         'Salary': [],
@@ -748,25 +629,6 @@ const BankStatementProcessor = () => {
         }
       });
 
-      // Update session data
-      const processedFiles = [
-        ...sessionData.processedFiles,
-        ...files.map(f => ({
-          name: f.name,
-          size: f.size,
-          processedAt: new Date().toISOString(),
-          status: results.find(r => r.fileName === f.name)?.success ? 'success' : 'failed'
-        }))
-      ];
-
-      setSessionData({
-        hasExistingData: true,
-        processedFiles,
-        allTransactions,
-        sessionStats: stats,
-        sessionBalances: balanceInfo
-      });
-
       setResults(categorizedData);
       setUncategorizedData(uncategorized);
       
@@ -777,10 +639,9 @@ const BankStatementProcessor = () => {
       const overallOpeningBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.openingBalance, 0);
       const overallClosingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.closingBalance, 0);
       
-      addLog(`${isAppendingToSession ? 'Incremental' : 'Parallel'} processing complete!`, 'success');
-      addLog(`Session Total: ${processedFiles.length} files processed`, 'success');
-      addLog(`Current Batch: ${files.length - totalFailed}/${files.length} successful`, totalFailed > 0 ? 'error' : 'success');
-      addLog(`All Transactions: ${totalProcessed}, Categorized: ${totalCategorized}, Uncategorized: ${uncategorized.length}`, 'success');
+      addLog(`Parallel processing complete!`, 'success');
+      addLog(`Files: ${files.length - totalFailed}/${files.length} successful`, totalFailed > 0 ? 'error' : 'success');
+      addLog(`Total: ${totalProcessed}, Categorized: ${totalCategorized}, Uncategorized: ${uncategorized.length}`, 'success');
       addLog(`Success Rate: ${successRate}%`, 'success');
       addLog(`Overall Opening Balance: MUR ${overallOpeningBalance.toLocaleString()}`, 'success');
       addLog(`Overall Closing Balance: MUR ${overallClosingBalance.toLocaleString()}`, 'success');
@@ -1006,263 +867,6 @@ const BankStatementProcessor = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Session Dialog */}
-      {showSessionDialog && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4 shadow-xl">
-            <div className="max-h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
-              <div className="space-y-2">
-                {logs.map((log, index) => (
-                  <div key={index} className="flex items-start text-sm">
-                    <div className="mr-3 mt-1">
-                      {log.type === 'success' && <CheckCircle className="h-4 w-4 text-green-500" />}
-                      {log.type === 'error' && <AlertCircle className="h-4 w-4 text-red-500" />}
-                      {log.type === 'info' && <div className="h-2 w-2 bg-blue-500 rounded-full mt-1" />}
-                    </div>
-                    <div>
-                      <span className="text-gray-500 mr-2">{log.timestamp}</span>
-                      <span className={`${log.type === 'error' ? 'text-red-600' : log.type === 'success' ? 'text-green-600' : 'text-gray-700'}`}>
-                        {log.message}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Results Section */}
-        {results && (
-          <div className="space-y-6">
-            
-            {/* File Processing Stats - Enhanced */}
-            {Object.keys(fileStats).length > 0 && (
-              <div className="bg-white rounded-xl shadow-sm border p-6">
-                <h3 className="text-xl font-medium text-gray-800 mb-4">File Processing Statistics</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {Object.entries(fileStats).filter(([key]) => key !== 'balanceInfo').map(([fileName, stats]) => (
-                    <div key={fileName} className="bg-gray-50 rounded-lg p-4">
-                      <h4 className="font-medium text-gray-800 text-sm mb-2 truncate" title={fileName}>
-                        {fileName}
-                      </h4>
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-gray-600">Transactions:</span>
-                          <span className="font-medium">{stats.total}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-green-600">Categorized:</span>
-                          <span className="font-medium text-green-600">{stats.categorized}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-yellow-600">Need Review:</span>
-                          <span className="font-medium text-yellow-600">{stats.uncategorized}</span>
-                        </div>
-                        <div className="border-t pt-2 mt-2">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-blue-600">Opening:</span>
-                            <span className="font-medium text-blue-600">MUR {stats.openingBalance?.toLocaleString() || '0'}</span>
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-green-600">Closing:</span>
-                            <span className="font-medium text-green-600">MUR {stats.closingBalance?.toLocaleString() || '0'}</span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between text-sm border-t pt-1">
-                          <span className="text-gray-600">Success Rate:</span>
-                          <span className="font-medium text-gray-600">
-                            {stats.total > 0 ? ((stats.categorized / stats.total) * 100).toFixed(1) : 0}%
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Main Results */}
-            <div className="bg-white rounded-xl shadow-sm border p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-medium text-gray-800">
-                  Categorized Transactions
-                </h3>
-                <button
-                  onClick={generateExcel}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
-                >
-                  <Download className="h-5 w-5 mr-2" />
-                  Download Enhanced Report
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {Object.entries(results).map(([category, transactions]) => (
-                  <div key={category} className="bg-gray-50 rounded-lg p-4 border">
-                    <h4 className="font-medium text-gray-800 mb-2">{category}</h4>
-                    <div className="text-3xl font-bold text-blue-600 mb-1">
-                      {transactions.length}
-                    </div>
-                    <p className="text-sm text-gray-600 mb-3">
-                      MUR {transactions.reduce((sum, t) => sum + (t.amount || 0), 0).toLocaleString()}
-                    </p>
-                    {transactions.length > 0 && (
-                      <div className="space-y-1">
-                        {transactions.slice(0, 2).map((t, i) => (
-                          <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1 flex justify-between">
-                            <span>{t.transactionDate}</span>
-                            <span className="font-medium">MUR {t.amount?.toLocaleString()}</span>
-                          </div>
-                        ))}
-                        {transactions.length > 2 && (
-                          <div className="text-xs text-gray-400">
-                            +{transactions.length - 2} more transactions
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Uncategorized Data Alert */}
-            {uncategorizedData.length > 0 && (
-              <div className="bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-6">
-                <div className="flex items-start">
-                  <AlertCircle className="h-6 w-6 text-yellow-600 mr-3 mt-1" />
-                  <div>
-                    <h3 className="text-lg font-medium text-yellow-800 mb-2">
-                      {uncategorizedData.length} Transactions Need Manual Review
-                    </h3>
-                    <p className="text-yellow-700 mb-4">
-                      These transactions couldn't be automatically categorized using enhanced patterns. 
-                      They're included in your download for manual classification.
-                    </p>
-                    
-                    <div className="bg-white border rounded-lg p-4 max-h-48 overflow-y-auto">
-                      <h4 className="font-medium text-gray-800 mb-3">Preview of Uncategorized Items:</h4>
-                      <div className="space-y-2">
-                        {uncategorizedData.slice(0, 5).map((transaction, i) => (
-                          <div key={i} className="border-b pb-2">
-                            <div className="flex justify-between items-start mb-1">
-                              <span className="font-medium text-gray-800">
-                                {transaction.transactionDate}
-                              </span>
-                              <span className="text-lg font-bold text-gray-900">
-                                MUR {transaction.amount?.toLocaleString()}
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-600 truncate mb-1">
-                              {transaction.description}
-                            </div>
-                            <div className="text-xs text-gray-400">
-                              From: {transaction.sourceFile}
-                            </div>
-                          </div>
-                        ))}
-                        {uncategorizedData.length > 5 && (
-                          <div className="text-sm text-yellow-600 text-center pt-2">
-                            ... and {uncategorizedData.length - 5} more in the complete report
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Enhanced Features Section */}
-        <div className="mt-8 bg-green-50 border rounded-xl p-6">
-          <h3 className="text-lg font-medium text-green-800 mb-4">Enhanced System Features</h3>
-          <div className="grid md:grid-cols-3 gap-6">
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Improved Pattern Recognition</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Enhanced MCB statement parsing</li>
-                <li>• Better duplicate detection</li>
-                <li>• Improved date format handling</li>
-                <li>• Fuzzy keyword matching</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Advanced Categorization</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Expanded mapping rules</li>
-                <li>• Confidence scoring</li>
-                <li>• Multi-word keyword matching</li>
-                <li>• Enhanced validation checks</li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-medium text-green-700 mb-2">Professional Reporting</h4>
-              <ul className="text-sm text-green-600 space-y-1">
-                <li>• Category analysis sheet</li>
-                <li>• Statistical summaries</li>
-                <li>• Confidence indicators</li>
-                <li>• Better Excel formatting</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="text-center mt-8 py-6 border-t">
-          <p className="text-gray-600 text-sm">
-            Enhanced Bank Statement Processor v7.0 - Improved Pattern Recognition & Categorization
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default BankStatementProcessor;"text-center mb-6">
-              <AlertCircle className="h-12 w-12 text-blue-500 mx-auto mb-3" />
-              <h3 className="text-lg font-bold text-gray-800 mb-2">
-                You have existing processed data
-              </h3>
-              <p className="text-gray-600">
-                How would you like to handle the new files?
-              </p>
-            </div>
-            
-            <div className="space-y-3 mb-6">
-              <button
-                onClick={() => handleSessionChoice(true)}
-                className="w-full p-4 border-2 border-blue-200 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-all text-left"
-              >
-                <div className="font-medium text-blue-700">Add to Existing Session</div>
-                <div className="text-sm text-gray-600 mt-1">
-                  Combine new files with current data ({sessionData.processedFiles.length} files already processed)
-                </div>
-              </button>
-              
-              <button
-                onClick={() => handleSessionChoice(false)}
-                className="w-full p-4 border-2 border-gray-200 rounded-lg hover:border-gray-400 hover:bg-gray-50 transition-all text-left"
-              >
-                <div className="font-medium text-gray-700">Start New Session</div>
-                <div className="text-sm text-gray-600 mt-1">
-                  Clear existing data and start fresh with new files only
-                </div>
-              </button>
-            </div>
-            
-            <button
-              onClick={() => setShowSessionDialog(false)}
-              className="w-full py-2 text-gray-500 hover:text-gray-700 border border-gray-300 rounded"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
       <div className="max-w-7xl mx-auto p-6">
         
         {/* Header */}
@@ -1277,65 +881,6 @@ export default BankStatementProcessor;"text-center mb-6">
             Advanced PDF processing with improved pattern matching and categorization
           </p>
         </div>
-
-        {/* Session Status */}
-        {sessionData.hasExistingData && (
-          <div className="mb-6">
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center">
-                  <Info className="h-5 w-5 text-blue-600 mr-2" />
-                  <h3 className="font-medium text-blue-800">Active Processing Session</h3>
-                </div>
-                <button
-                  onClick={clearSession}
-                  className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                >
-                  Clear Session
-                </button>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
-                <div className="bg-white rounded p-3">
-                  <div className="text-lg font-bold text-blue-600">{sessionData.processedFiles.length}</div>
-                  <div className="text-sm text-gray-600">Files Processed</div>
-                </div>
-                <div className="bg-white rounded p-3">
-                  <div className="text-lg font-bold text-green-600">{sessionData.allTransactions.length}</div>
-                  <div className="text-sm text-gray-600">Total Transactions</div>
-                </div>
-                <div className="bg-white rounded p-3">
-                  <div className="text-lg font-bold text-purple-600">
-                    {Object.values(sessionData.sessionBalances || {}).reduce((sum, info) => sum + info.closingBalance, 0).toLocaleString()}
-                  </div>
-                  <div className="text-sm text-gray-600">MUR Total Balance</div>
-                </div>
-              </div>
-              
-              <details className="bg-white rounded p-3">
-                <summary className="cursor-pointer text-sm font-medium text-gray-700 hover:text-gray-900">
-                  View Processed Files ({sessionData.processedFiles.length})
-                </summary>
-                <div className="mt-2 max-h-32 overflow-y-auto">
-                  <div className="space-y-1">
-                    {sessionData.processedFiles.map((file, index) => (
-                      <div key={index} className="flex justify-between items-center text-xs bg-gray-50 rounded px-2 py-1">
-                        <span className="truncate">{file.name}</span>
-                        <div className="flex items-center space-x-2 flex-shrink-0">
-                          <span className="text-gray-500">{new Date(file.processedAt).toLocaleTimeString()}</span>
-                          {file.status === 'success' ? 
-                            <CheckCircle className="h-3 w-3 text-green-500" /> :
-                            <AlertCircle className="h-3 w-3 text-red-500" />
-                          }
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </details>
-            </div>
-          </div>
-        )}
 
         {/* Enhanced Quick Stats */}
         {results && (
@@ -1578,4 +1123,215 @@ export default BankStatementProcessor;"text-center mb-6">
               <Info className="h-5 w-5 text-blue-500 mr-2" />
               <h3 className="text-lg font-medium text-gray-800">Processing Logs</h3>
             </div>
-            <div className
+            <div className="max-h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
+              <div className="space-y-2">
+                {logs.map((log, index) => (
+                  <div key={index} className="flex items-start text-sm">
+                    <div className="mr-3 mt-1">
+                      {log.type === 'success' && <CheckCircle className="h-4 w-4 text-green-500" />}
+                      {log.type === 'error' && <AlertCircle className="h-4 w-4 text-red-500" />}
+                      {log.type === 'info' && <div className="h-2 w-2 bg-blue-500 rounded-full mt-1" />}
+                    </div>
+                    <div>
+                      <span className="text-gray-500 mr-2">{log.timestamp}</span>
+                      <span className={`${log.type === 'error' ? 'text-red-600' : log.type === 'success' ? 'text-green-600' : 'text-gray-700'}`}>
+                        {log.message}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Results Section - Keep original structure */}
+        {results && (
+          <div className="space-y-6">
+            
+            {/* File Processing Stats - Enhanced */}
+            {Object.keys(fileStats).length > 0 && (
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <h3 className="text-xl font-medium text-gray-800 mb-4">File Processing Statistics</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {Object.entries(fileStats).filter(([key]) => key !== 'balanceInfo').map(([fileName, stats]) => (
+                    <div key={fileName} className="bg-gray-50 rounded-lg p-4">
+                      <h4 className="font-medium text-gray-800 text-sm mb-2 truncate" title={fileName}>
+                        {fileName}
+                      </h4>
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-600">Transactions:</span>
+                          <span className="font-medium">{stats.total}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-green-600">Categorized:</span>
+                          <span className="font-medium text-green-600">{stats.categorized}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-yellow-600">Need Review:</span>
+                          <span className="font-medium text-yellow-600">{stats.uncategorized}</span>
+                        </div>
+                        <div className="border-t pt-2 mt-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-blue-600">Opening:</span>
+                            <span className="font-medium text-blue-600">MUR {stats.openingBalance?.toLocaleString() || '0'}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-green-600">Closing:</span>
+                            <span className="font-medium text-green-600">MUR {stats.closingBalance?.toLocaleString() || '0'}</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between text-sm border-t pt-1">
+                          <span className="text-gray-600">Success Rate:</span>
+                          <span className="font-medium text-gray-600">
+                            {stats.total > 0 ? ((stats.categorized / stats.total) * 100).toFixed(1) : 0}%
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Main Results */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-medium text-gray-800">
+                  Categorized Transactions
+                </h3>
+                <button
+                  onClick={generateExcel}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
+                >
+                  <Download className="h-5 w-5 mr-2" />
+                  Download Enhanced Report
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {Object.entries(results).map(([category, transactions]) => (
+                  <div key={category} className="bg-gray-50 rounded-lg p-4 border">
+                    <h4 className="font-medium text-gray-800 mb-2">{category}</h4>
+                    <div className="text-3xl font-bold text-blue-600 mb-1">
+                      {transactions.length}
+                    </div>
+                    <p className="text-sm text-gray-600 mb-3">
+                      MUR {transactions.reduce((sum, t) => sum + (t.amount || 0), 0).toLocaleString()}
+                    </p>
+                    {transactions.length > 0 && (
+                      <div className="space-y-1">
+                        {transactions.slice(0, 2).map((t, i) => (
+                          <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1 flex justify-between">
+                            <span>{t.transactionDate}</span>
+                            <span className="font-medium">MUR {t.amount?.toLocaleString()}</span>
+                          </div>
+                        ))}
+                        {transactions.length > 2 && (
+                          <div className="text-xs text-gray-400">
+                            +{transactions.length - 2} more transactions
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Keep original uncategorized section */}
+            {uncategorizedData.length > 0 && (
+              <div className="bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-6">
+                <div className="flex items-start">
+                  <AlertCircle className="h-6 w-6 text-yellow-600 mr-3 mt-1" />
+                  <div>
+                    <h3 className="text-lg font-medium text-yellow-800 mb-2">
+                      {uncategorizedData.length} Transactions Need Manual Review
+                    </h3>
+                    <p className="text-yellow-700 mb-4">
+                      These transactions couldn't be automatically categorized using enhanced patterns. 
+                      They're included in your download for manual classification.
+                    </p>
+                    
+                    <div className="bg-white border rounded-lg p-4 max-h-48 overflow-y-auto">
+                      <h4 className="font-medium text-gray-800 mb-3">Preview of Uncategorized Items:</h4>
+                      <div className="space-y-2">
+                        {uncategorizedData.slice(0, 5).map((transaction, i) => (
+                          <div key={i} className="border-b pb-2">
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="font-medium text-gray-800">
+                                {transaction.transactionDate}
+                              </span>
+                              <span className="text-lg font-bold text-gray-900">
+                                MUR {transaction.amount?.toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="text-sm text-gray-600 truncate mb-1">
+                              {transaction.description}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              From: {transaction.sourceFile}
+                            </div>
+                          </div>
+                        ))}
+                        {uncategorizedData.length > 5 && (
+                          <div className="text-sm text-yellow-600 text-center pt-2">
+                            ... and {uncategorizedData.length - 5} more in the complete report
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Enhanced Features Section */}
+        <div className="mt-8 bg-green-50 border rounded-xl p-6">
+          <h3 className="text-lg font-medium text-green-800 mb-4">Enhanced System Features</h3>
+          <div className="grid md:grid-cols-3 gap-6">
+            <div>
+              <h4 className="font-medium text-green-700 mb-2">Improved Pattern Recognition</h4>
+              <ul className="text-sm text-green-600 space-y-1">
+                <li>• Enhanced MCB statement parsing</li>
+                <li>• Better duplicate detection</li>
+                <li>• Improved date format handling</li>
+                <li>• Fuzzy keyword matching</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-medium text-green-700 mb-2">Advanced Categorization</h4>
+              <ul className="text-sm text-green-600 space-y-1">
+                <li>• Expanded mapping rules</li>
+                <li>• Confidence scoring</li>
+                <li>• Multi-word keyword matching</li>
+                <li>• Enhanced validation checks</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-medium text-green-700 mb-2">Professional Reporting</h4>
+              <ul className="text-sm text-green-600 space-y-1">
+                <li>• Category analysis sheet</li>
+                <li>• Statistical summaries</li>
+                <li>• Confidence indicators</li>
+                <li>• Better Excel formatting</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="text-center mt-8 py-6 border-t">
+          <p className="text-gray-600 text-sm">
+            Enhanced Bank Statement Processor v7.0 - Improved Pattern Recognition & Categorization
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default BankStatementProcessor;
