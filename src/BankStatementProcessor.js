@@ -1,4 +1,3 @@
-/* global XLSX */
 import React, { useState, useRef } from 'react';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info } from 'lucide-react';
 
@@ -9,7 +8,6 @@ const BankStatementProcessor = () => {
   const [logs, setLogs] = useState([]);
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
-  const [combinedMode, setCombinedMode] = useState(false);
   const fileInputRef = useRef(null);
 
   // Enhanced mapping rules based on MCB statements
@@ -78,20 +76,10 @@ const BankStatementProcessor = () => {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Better text extraction that preserves structure
-        let pageText = '';
-        let lastY = null;
-        
-        // Process text items while preserving line structure
-        textContent.items.forEach(item => {
-          // If Y position changed significantly, we're on a new line
-          if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
-            pageText += '\n';
-          }
-          
-          pageText += item.str + ' ';
-          lastY = item.transform[5];
-        });
+        // Extract text items and join them with spaces
+        const pageText = textContent.items
+          .map(item => item.str)
+          .join(' ');
         
         fullText += pageText + '\n';
         
@@ -144,7 +132,7 @@ const BankStatementProcessor = () => {
               const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
               
               // Apply image enhancement for better OCR results
-              const enhancedText = await processImageWithOCR(canvas, pageNum);
+              const enhancedText = await this.processImageWithOCR(canvas, pageNum);
               
               if (enhancedText && enhancedText.length > 0) {
                 ocrText += enhancedText + '\n';
@@ -224,175 +212,123 @@ const BankStatementProcessor = () => {
     addLog(`Opening Balance: MUR ${openingBalance.toLocaleString()}`, 'success');
     addLog(`Closing Balance: MUR ${closingBalance.toLocaleString()}`, 'success');
     
-    // Clean and normalize text while preserving line structure
-    const cleanedText = text
-      .replace(/\r/g, '') // Remove carriage returns
-      .replace(/\n+/g, '\n') // Normalize multiple newlines
-      .trim();
+    // Enhanced patterns for MCB statements
+    // Pattern 1: Standard MCB format: DD/MM/YYYY DD/MM/YYYY AMOUNT BALANCE DESCRIPTION
+    const mcbPattern1 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
     
-    // Split into lines for processing
-    const lines = cleanedText.split('\n');
+    // Pattern 2: Alternative format with negative amounts: DD/MM/YYYY DD/MM/YYYY -AMOUNT BALANCE DESCRIPTION
+    const mcbPattern2 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+(-?[\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
     
-    addLog(`Processing ${lines.length} lines for MCB transaction patterns...`, 'info');
-    addLog(`Sample lines: ${lines.slice(10, 15).join(' | ')}`, 'info');
+    // Pattern 3: Line-by-line format where each transaction is on separate lines
+    const lines = text.split(/\r?\n/);
+    
+    addLog(`Searching for MCB transaction patterns...`, 'info');
     
     let transactionCount = 0;
-    const processedTransactions = new Set();
+    const patterns = [mcbPattern1, mcbPattern2];
     
-    // Multiple pattern approaches for different MCB formats
-    for (let i = 0; i < lines.length; i++) {
-      let line = lines[i].trim();
+    // Try each pattern
+    for (let patternIndex = 0; patternIndex < patterns.length; patternIndex++) {
+      const pattern = patterns[patternIndex];
+      let match;
       
-      // Skip empty lines or very short lines
-      if (!line || line.length < 15) continue;
+      addLog(`Trying pattern ${patternIndex + 1}...`, 'info');
       
-      // Skip header lines
-      if (line.toLowerCase().includes('trans date') ||
-          line.toLowerCase().includes('value date') ||
-          line.toLowerCase().includes('statement page') ||
-          line.toLowerCase().includes('account number') ||
-          line.toLowerCase().includes('current account') ||
-          line.toLowerCase().includes('opening balance') ||
-          line.toLowerCase().includes('closing balance') ||
-          line.toLowerCase().includes('balance forward')) {
-        addLog(`Skipping header: "${line.substring(0, 50)}..."`, 'info');
-        continue;
-      }
-      
-      // Pattern 1: Standard MCB format - Date Date Amount Balance Description
-      // Look for lines starting with date patterns
-      let match = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([+-]?[\d,]+\.?\d*)\s+([+-]?[\d,]+\.?\d*)\s+(.+)$/);
-      
-      if (!match) {
-        // Pattern 2: Try with flexible spacing
-        match = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([+-]?[\d,]+\.?\d*)\s+([+-]?[\d,]+\.?\d*)\s*(.*)$/);
-      }
-      
-      if (!match) {
-        // Pattern 3: Check if transaction data might be spread across multiple lines
-        // Look for line starting with dates but missing amount/balance
-        const dateMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+)$/);
-        if (dateMatch && i + 1 < lines.length) {
-          const nextLine = lines[i + 1].trim();
-          // Check if next line contains numbers (amount/balance)
-          if (nextLine.match(/^[+-]?[\d,]+\.?\d+\s+[+-]?[\d,]+\.?\d+/)) {
-            line = line + ' ' + nextLine;
-            match = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([+-]?[\d,]+\.?\d*)\s+([+-]?[\d,]+\.?\d*)$/);
-            if (match) {
-              i++; // Skip the next line since we used it
-            }
-          }
-        }
-      }
-      
-      if (!match) {
-        // Pattern 4: Look for amounts first, then work backwards
-        const amountMatch = line.match(/([+-]?[\d,]+\.?\d*)\s+([+-]?[\d,]+\.?\d*)\s*$/);
-        if (amountMatch && line.includes('/')) {
-          // Try to extract dates from the beginning
-          const fullMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([+-]?[\d,]+\.?\d*)\s+([+-]?[\d,]+\.?\d*)$/);
-          if (fullMatch) {
-            match = fullMatch;
-          }
-        }
-      }
-      
-      if (match) {
-        const [, transDate, valueDate, description, amountStr, balanceStr] = match;
+      while ((match = pattern.exec(text)) !== null) {
+        const [fullMatch, transDate, valueDate, amount, balance, description] = match;
         
         // Clean up the extracted data
-        let cleanDescription = description.trim().replace(/\s+/g, ' ');
-        
-        // Remove any trailing numbers that might be part of amount/balance
-        cleanDescription = cleanDescription.replace(/\s+[\d,]+\.?\d*\s*$/, '').trim();
-        
-        const transactionAmount = parseFloat(amountStr.replace(/,/g, ''));
-        const balanceAmount = parseFloat(balanceStr.replace(/,/g, ''));
+        const cleanDescription = description.trim().replace(/\s+/g, ' ').replace(/[\r\n]/g, '');
+        const transactionAmount = parseFloat(amount.replace(/,/g, ''));
+        const balanceAmount = parseFloat(balance.replace(/,/g, ''));
         
         // Validation checks
-        if (isNaN(transactionAmount) || isNaN(balanceAmount) || cleanDescription.length < 3) {
-          addLog(`Invalid data: "${line.substring(0, 50)}..." - Amount: ${amountStr}, Balance: ${balanceStr}`, 'info');
+        if (cleanDescription.toLowerCase().includes('trans date') ||
+            cleanDescription.toLowerCase().includes('statement page') ||
+            cleanDescription.toLowerCase().includes('account number') ||
+            cleanDescription.toLowerCase().includes('balance forward') ||
+            isNaN(transactionAmount) || 
+            cleanDescription.length < 3) {
+          addLog(`Skipping header/invalid: "${cleanDescription.substring(0, 50)}..."`, 'info');
           continue;
         }
         
         // Check for duplicate transactions
-        const transactionKey = `${transDate}-${cleanDescription.substring(0, 30)}-${Math.abs(transactionAmount)}`;
+        const isDuplicate = transactions.some(t => 
+          t.transactionDate === transDate && 
+          t.description === cleanDescription && 
+          t.amount === Math.abs(transactionAmount)
+        );
         
-        if (processedTransactions.has(transactionKey)) {
+        if (isDuplicate) {
           addLog(`Skipping duplicate: ${transDate} - ${cleanDescription.substring(0, 30)}...`, 'info');
           continue;
         }
-        
-        processedTransactions.add(transactionKey);
-        
-        // Determine credit/debit based on amount sign and description
-        const isCredit = transactionAmount > 0 || 
-                        cleanDescription.toLowerCase().includes('deposit') ||
-                        cleanDescription.toLowerCase().includes('cash cheque') ||
-                        cleanDescription.toLowerCase().includes('credit') ||
-                        cleanDescription.toLowerCase().includes('transfer in');
         
         transactions.push({
           transactionDate: transDate,
           valueDate: valueDate,
           description: cleanDescription,
-          amount: Math.abs(transactionAmount),
+          amount: Math.abs(transactionAmount), // Always use absolute value
           balance: Math.abs(balanceAmount),
           sourceFile: fileName,
-          originalLine: line.trim(),
-          rawAmount: amountStr,
-          isDebit: !isCredit,
-          isCredit: isCredit
+          originalLine: fullMatch.trim(),
+          rawAmount: amount, // Keep original for debugging
+          isDebit: transactionAmount < 0 || amount.includes('-')
         });
         
         transactionCount++;
-        addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${isCredit ? '(Credit)' : '(Debit)'}`, 'success');
-      } else {
-        // Debug: Show lines that don't match for troubleshooting
-        if (line.includes('/20') && (line.includes('202') || line.includes('20'))) {
-          addLog(`No match for potential transaction: "${line.substring(0, 80)}..."`, 'info');
-        }
+        addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${transactionAmount < 0 ? '(Debit)' : '(Credit)'}`, 'success');
+      }
+      
+      // If we found transactions with this pattern, don't try others
+      if (transactionCount > 0) {
+        addLog(`Pattern ${patternIndex + 1} successful - ${transactionCount} transactions found`, 'success');
+        break;
       }
     }
     
-    // If still no transactions found, try a more aggressive approach
+    // If still no transactions found, try line-by-line parsing
     if (transactionCount === 0) {
-      addLog('No transactions found with standard patterns, trying alternative extraction...', 'info');
+      addLog(`No regex patterns worked, trying line-by-line parsing...`, 'info');
       
-      // Look for any line with dates and numbers
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
+        if (line.length < 20) continue;
         
-        // Look for pattern: anything with two dates and two numbers
-        const flexibleMatch = line.match(/(\d{2}\/\d{2}\/\d{4}).*?(\d{2}\/\d{2}\/\d{4}).*?([\d,]+\.?\d*).*?([\d,]+\.?\d*)/);
+        // Look for date pattern at start of line
+        const lineMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+(-?[\d,]+\.?\d*)\s+(.+)$/);
         
-        if (flexibleMatch) {
-          const [, transDate, valueDate, amount1, amount2] = flexibleMatch;
+        if (lineMatch) {
+          const [, transDate, valueDate, amount, balance, description] = lineMatch;
+          const transactionAmount = parseFloat(amount.replace(/,/g, ''));
+          const balanceAmount = parseFloat(balance.replace(/,/g, ''));
           
-          // Extract description (everything between second date and first number)
-          const descMatch = line.match(/\d{2}\/\d{2}\/\d{4}\s+\d{2}\/\d{2}\/\d{4}\s+(.+?)\s+[\d,]+\.?\d*/);
-          const description = descMatch ? descMatch[1].trim() : 'Transaction';
-          
-          if (description.length > 2 && !description.toLowerCase().includes('trans date')) {
-            const transactionAmount = parseFloat(amount1.replace(/,/g, ''));
-            const balanceAmount = parseFloat(amount2.replace(/,/g, ''));
+          if (!isNaN(transactionAmount) && description.trim().length > 3) {
+            const cleanDescription = description.trim();
             
-            if (!isNaN(transactionAmount) && !isNaN(balanceAmount)) {
+            // Check for duplicate
+            const isDuplicate = transactions.some(t => 
+              t.transactionDate === transDate && 
+              t.description === cleanDescription && 
+              t.amount === Math.abs(transactionAmount)
+            );
+            
+            if (!isDuplicate) {
               transactions.push({
                 transactionDate: transDate,
                 valueDate: valueDate,
-                description: description,
+                description: cleanDescription,
                 amount: Math.abs(transactionAmount),
                 balance: Math.abs(balanceAmount),
                 sourceFile: fileName,
                 originalLine: line,
-                rawAmount: amount1,
-                isDebit: transactionAmount < 0,
-                isCredit: transactionAmount > 0
+                rawAmount: amount,
+                isDebit: transactionAmount < 0 || amount.includes('-')
               });
               
               transactionCount++;
-              addLog(`Alternative extraction ${transactionCount}: ${transDate} - ${description.substring(0, 30)}... - MUR ${Math.abs(transactionAmount)}`, 'success');
+              addLog(`Line Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)}`, 'success');
             }
           }
         }
@@ -658,8 +594,7 @@ const BankStatementProcessor = () => {
       const summaryData = [
         ['BANK STATEMENT PROCESSING REPORT'],
         ['Generated:', timestamp],
-        ['Files Processed:', Object.keys(fileStats).filter(k => k !== 'balanceInfo').length],
-        ['Processing Mode:', combinedMode ? 'Combined (Single Sheet)' : 'Separate Processing'],
+        ['Files Processed:', Object.keys(fileStats).length],
         [''],
         ['SUMMARY BY CATEGORY'],
         ['Category', 'Count', 'Total Amount (MUR)'],
@@ -684,128 +619,56 @@ const BankStatementProcessor = () => {
       const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
       XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
       
-      if (combinedMode) {
-        // COMBINED MODE: All transactions in one chronological sheet
-        addLog('Creating combined Excel sheet with all transactions...', 'info');
-        
-        const allTransactionData = [
-          ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status']
-        ];
-        
-        // Collect all transactions and sort chronologically
-        const allTransactions = [];
-        
-        // Add categorized transactions
-        Object.entries(results).forEach(([category, transactions]) => {
-          transactions.forEach(transaction => {
-            allTransactions.push({
-              ...transaction,
-              category,
-              status: 'Categorized'
-            });
-          });
-        });
-        
-        // Add uncategorized transactions
-        uncategorizedData.forEach(transaction => {
-          allTransactions.push({
-            ...transaction,
-            category: 'UNCATEGORIZED',
-            status: 'Needs Review'
-          });
-        });
-        
-        // Sort all transactions by date
-        allTransactions.sort((a, b) => {
-          const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
-          const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
-          return dateA - dateB;
-        });
-        
-        // Add sorted transactions to sheet
-        allTransactions.forEach(transaction => {
-          allTransactionData.push([
-            transaction.transactionDate,
-            transaction.valueDate,
-            transaction.description,
-            transaction.amount.toFixed(2),
-            transaction.balance.toFixed(2),
-            transaction.category,
-            transaction.sourceFile,
-            transaction.status
-          ]);
-        });
-        
-        const combinedWS = XLSX.utils.aoa_to_sheet(allTransactionData);
-        
-        // Set column widths for better formatting
-        combinedWS['!cols'] = [
-          { wch: 12 }, // Date
-          { wch: 12 }, // Value Date
-          { wch: 50 }, // Description
-          { wch: 15 }, // Amount
-          { wch: 15 }, // Balance
-          { wch: 20 }, // Category
-          { wch: 30 }, // Source File (wider for combined mode)
-          { wch: 12 }  // Status
-        ];
-        
-        XLSX.utils.book_append_sheet(wb, combinedWS, "All Transactions Combined");
-        
-        addLog(`Combined sheet created with ${allTransactions.length} transactions from ${Object.keys(fileStats).filter(k => k !== 'balanceInfo').length} files`, 'success');
-        
-      } else {
-        // SEPARATE MODE: Original behavior
-        const transactionData = [
-          ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status']
-        ];
-        
-        // Add categorized transactions
-        Object.entries(results).forEach(([category, transactions]) => {
-          transactions.forEach(transaction => {
-            transactionData.push([
-              transaction.transactionDate,
-              transaction.valueDate,
-              transaction.description,
-              transaction.amount.toFixed(2),
-              transaction.balance.toFixed(2),
-              category,
-              transaction.sourceFile,
-              'Categorized'
-            ]);
-          });
-        });
-        
-        // Add uncategorized transactions
-        uncategorizedData.forEach(transaction => {
+      // Sheet 2: All Transactions (Professional Format)
+      const transactionData = [
+        ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status']
+      ];
+      
+      // Add categorized transactions
+      Object.entries(results).forEach(([category, transactions]) => {
+        transactions.forEach(transaction => {
           transactionData.push([
             transaction.transactionDate,
             transaction.valueDate,
             transaction.description,
             transaction.amount.toFixed(2),
             transaction.balance.toFixed(2),
-            'UNCATEGORIZED',
+            category,
             transaction.sourceFile,
-            'Needs Review'
+            'Categorized'
           ]);
         });
-        
-        const transactionWS = XLSX.utils.aoa_to_sheet(transactionData);
-        
-        // Set column widths for better formatting
-        transactionWS['!cols'] = [
-          { wch: 12 }, // Date
-          { wch: 12 }, // Value Date
-          { wch: 50 }, // Description
-          { wch: 15 }, // Amount
-          { wch: 15 }, // Balance
-          { wch: 20 }, // Category
-          { wch: 25 }, // Source File
-          { wch: 12 }  // Status
-        ];
-        
-        XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
-      }
+      });
+      
+      // Add uncategorized transactions
+      uncategorizedData.forEach(transaction => {
+        transactionData.push([
+          transaction.transactionDate,
+          transaction.valueDate,
+          transaction.description,
+          transaction.amount.toFixed(2),
+          transaction.balance.toFixed(2),
+          'UNCATEGORIZED',
+          transaction.sourceFile,
+          'Needs Review'
+        ]);
+      });
+      
+      const transactionWS = XLSX.utils.aoa_to_sheet(transactionData);
+      
+      // Set column widths for better formatting
+      transactionWS['!cols'] = [
+        { wch: 12 }, // Date
+        { wch: 12 }, // Value Date
+        { wch: 50 }, // Description
+        { wch: 15 }, // Amount
+        { wch: 15 }, // Balance
+        { wch: 20 }, // Category
+        { wch: 25 }, // Source File
+        { wch: 12 }  // Status
+      ];
+      
+      XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
       
       // Sheet 3: Uncategorized Items (for manual review)
       if (uncategorizedData.length > 0) {
@@ -841,13 +704,13 @@ const BankStatementProcessor = () => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Bank_Statements_Report_${combinedMode ? 'Combined' : 'Separate'}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      a.download = `Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       
       URL.revokeObjectURL(url);
-      addLog(`${combinedMode ? 'Combined' : 'Separate'} Excel report downloaded successfully!`, 'success');
+      addLog('Professional Excel report downloaded!', 'success');
     });
   };
 
@@ -1000,39 +863,6 @@ const BankStatementProcessor = () => {
             )}
           </div>
         </div>
-
-        {/* Processing Mode Toggle */}
-        {files.length > 1 && (
-          <div className="bg-white rounded-xl shadow-sm border p-6 mb-6">
-            <div className="text-center">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Excel Output Format
-              </h3>
-              <div className="flex justify-center">
-                <div className="bg-gray-50 rounded-lg p-4 border">
-                  <label className="flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={combinedMode}
-                      onChange={(e) => setCombinedMode(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-3"
-                    />
-                    <div className="text-left">
-                      <div className="font-medium text-gray-800">
-                        Combine all documents into single Excel sheet
-                      </div>
-                      <div className="text-sm text-gray-600 mt-1">
-                        {combinedMode 
-                          ? "All transactions will be merged chronologically with source file tracking" 
-                          : "Each document will maintain separate processing (default)"}
-                      </div>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Process Button */}
         <div className="text-center mb-6">
