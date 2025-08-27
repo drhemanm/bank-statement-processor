@@ -233,73 +233,114 @@ const BankStatementProcessor = () => {
     // Split into lines for better processing
     const lines = cleanedText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     
-    // Look for transaction lines more carefully
+    // Since PDF text doesn't have proper line breaks, parse transactions directly from the text
+    addLog(`Parsing transactions from continuous text...`, 'info');
+    
     let transactionCount = 0;
-    const processedTransactions = new Set(); // To avoid duplicates
+    const processedTransactions = new Set();
     
-    addLog(`Processing ${lines.length} lines for transactions...`, 'info');
+    // Use regex to find all transaction patterns in the continuous text
+    // Pattern: DD/MM/YYYY DD/MM/YYYY [amount] [balance] [description]
+    const transactionPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+([^0-9\/]+?)(?=\d{2}\/\d{2}\/\d{4}|$)/g;
     
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    let match;
+    while ((match = transactionPattern.exec(cleanedText)) !== null) {
+      const [fullMatch, transDate, valueDate, amount, balance, description] = match;
       
-      // Skip empty lines or very short lines
-      if (line.length < 15) continue;
+      // Clean description
+      let cleanDescription = description.trim().replace(/\s+/g, ' ');
       
-      // Look for lines that start with date pattern: DD/MM/YYYY DD/MM/YYYY
-      const datePattern = /^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+)$/;
-      const match = line.match(datePattern);
+      // Skip headers and system text
+      if (cleanDescription.toLowerCase().includes('trans date') ||
+          cleanDescription.toLowerCase().includes('transaction details') ||
+          cleanDescription.toLowerCase().includes('statement page') ||
+          cleanDescription.toLowerCase().includes('account number') ||
+          cleanDescription.toLowerCase().includes('opening balance') ||
+          cleanDescription.toLowerCase().includes('closing balance') ||
+          cleanDescription.toLowerCase().includes('current account') ||
+          cleanDescription.length < 5) {
+        addLog(`Skipping header/system text: "${cleanDescription.substring(0, 50)}..."`, 'info');
+        continue;
+      }
       
-      if (match) {
-        const [, transDate, valueDate, remainder] = match;
+      const transactionAmount = parseFloat(amount.replace(/,/g, ''));
+      const balanceAmount = parseFloat(balance.replace(/,/g, ''));
+      
+      // Validate amounts
+      if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) {
+        addLog(`Skipping invalid amounts: amount=${transactionAmount}, balance=${balanceAmount}`, 'info');
+        continue;
+      }
+      
+      // Create unique key
+      const transactionKey = `${transDate}-${cleanDescription.substring(0, 30)}-${transactionAmount}`;
+      
+      if (processedTransactions.has(transactionKey)) {
+        addLog(`Skipping duplicate: ${transDate} - ${cleanDescription.substring(0, 30)}...`, 'info');
+        continue;
+      }
+      
+      processedTransactions.add(transactionKey);
+      
+      // Determine credit vs debit
+      const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
+                      cleanDescription.toLowerCase().includes('cash cheque') ||
+                      (cleanDescription.toLowerCase().includes('interbank transfer') && 
+                       cleanDescription.toLowerCase().includes('mauritius revenue'));
+      
+      transactions.push({
+        transactionDate: transDate,
+        valueDate: valueDate,
+        description: cleanDescription,
+        amount: Math.abs(transactionAmount),
+        balance: Math.abs(balanceAmount),
+        sourceFile: fileName,
+        originalLine: fullMatch.trim(),
+        rawAmount: amount,
+        isDebit: !isCredit,
+        isCredit: isCredit
+      });
+      
+      transactionCount++;
+      addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${isCredit ? '(Credit)' : '(Debit)'}`, 'success');
+    }
+    
+    // Try alternative pattern if first one didn't work well
+    if (transactionCount < 10) {
+      addLog(`Trying alternative transaction pattern...`, 'info');
+      
+      // Alternative pattern: look for sequences of date date description amount balance
+      const altPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)(?=\s+\d{2}\/\d{2}\/\d{4}|$)/g;
+      
+      let altMatch;
+      while ((altMatch = altPattern.exec(cleanedText)) !== null) {
+        const [fullMatch, transDate, valueDate, description, amount, balance] = altMatch;
         
-        // Parse the remainder to extract description and amounts
-        // Look for amounts at the end: description [amount] balance OR description amount balance
-        const amountPattern = /(.*?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
-        const amountMatch = remainder.match(amountPattern);
+        let cleanDescription = description.trim().replace(/\s+/g, ' ');
         
-        if (amountMatch) {
-          const [, description, amount, balance] = amountMatch;
-          
-          // Clean description
-          let cleanDescription = description.trim().replace(/\s+/g, ' ');
-          
-          // Skip headers and invalid entries
-          if (cleanDescription.toLowerCase().includes('trans date') ||
-              cleanDescription.toLowerCase().includes('transaction details') ||
-              cleanDescription.toLowerCase().includes('statement page') ||
-              cleanDescription.toLowerCase().includes('account number') ||
-              cleanDescription.toLowerCase().includes('balance forward') ||
-              cleanDescription.toLowerCase().includes('opening balance') ||
-              cleanDescription.toLowerCase().includes('closing balance') ||
-              cleanDescription.length < 3) {
-            addLog(`Skipping header/invalid: "${cleanDescription.substring(0, 50)}..."`, 'info');
-            continue;
-          }
-          
-          const transactionAmount = parseFloat(amount.replace(/,/g, ''));
-          const balanceAmount = parseFloat(balance.replace(/,/g, ''));
-          
-          // Skip if amounts are invalid
-          if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) {
-            addLog(`Skipping invalid amounts: amount=${transactionAmount}, balance=${balanceAmount}`, 'info');
-            continue;
-          }
-          
-          // Create unique key to avoid duplicates
-          const transactionKey = `${transDate}-${cleanDescription}-${transactionAmount}`;
-          
-          if (processedTransactions.has(transactionKey)) {
-            addLog(`Skipping duplicate: ${transDate} - ${cleanDescription.substring(0, 30)}...`, 'info');
-            continue;
-          }
-          
+        // Skip headers and already processed
+        if (cleanDescription.toLowerCase().includes('trans date') ||
+            cleanDescription.toLowerCase().includes('transaction details') ||
+            cleanDescription.length < 5) {
+          continue;
+        }
+        
+        const transactionAmount = parseFloat(amount.replace(/,/g, ''));
+        const balanceAmount = parseFloat(balance.replace(/,/g, ''));
+        
+        if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) {
+          continue;
+        }
+        
+        const transactionKey = `${transDate}-${cleanDescription.substring(0, 30)}-${transactionAmount}`;
+        
+        if (!processedTransactions.has(transactionKey)) {
           processedTransactions.add(transactionKey);
           
-          // Determine if it's a credit or debit
           const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
-                          cleanDescription.toLowerCase().includes('cash cheque') ||
-                          (cleanDescription.toLowerCase().includes('transfer') && 
-                           cleanDescription.toLowerCase().includes('mauritius revenue'));
+                         cleanDescription.toLowerCase().includes('cash cheque') ||
+                         (cleanDescription.toLowerCase().includes('interbank transfer') && 
+                          cleanDescription.toLowerCase().includes('mauritius revenue'));
           
           transactions.push({
             transactionDate: transDate,
@@ -308,86 +349,21 @@ const BankStatementProcessor = () => {
             amount: Math.abs(transactionAmount),
             balance: Math.abs(balanceAmount),
             sourceFile: fileName,
-            originalLine: line,
+            originalLine: fullMatch.trim(),
             rawAmount: amount,
             isDebit: !isCredit,
             isCredit: isCredit
           });
           
           transactionCount++;
-          addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${isCredit ? '(Credit)' : '(Debit)'}`, 'success');
-        } else {
-          // Try alternative parsing for lines with different format
-          // Maybe description amount balance in different order
-          const altPattern = /(.*?)\s+([\d,]+\.?\d*)$/;
-          const altMatch = remainder.match(altPattern);
-          
-          if (altMatch) {
-            const [, description, balance] = altMatch;
-            const cleanDescription = description.trim().replace(/\s+/g, ' ');
-            
-            // Skip headers
-            if (cleanDescription.toLowerCase().includes('trans date') ||
-                cleanDescription.toLowerCase().includes('transaction details') ||
-                cleanDescription.length < 3) {
-              continue;
-            }
-            
-            const balanceAmount = parseFloat(balance.replace(/,/g, ''));
-            
-            if (!isNaN(balanceAmount)) {
-              // For lines with only balance, try to calculate transaction amount from previous balance
-              let transactionAmount = 0;
-              
-              if (i > 0 && transactions.length > 0) {
-                const prevBalance = transactions[transactions.length - 1].balance;
-                transactionAmount = Math.abs(balanceAmount - prevBalance);
-              }
-              
-              if (transactionAmount > 0) {
-                const transactionKey = `${transDate}-${cleanDescription}-${transactionAmount}`;
-                
-                if (!processedTransactions.has(transactionKey)) {
-                  processedTransactions.add(transactionKey);
-                  
-                  const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
-                                 (cleanDescription.toLowerCase().includes('transfer') && 
-                                  cleanDescription.toLowerCase().includes('mauritius revenue'));
-                  
-                  transactions.push({
-                    transactionDate: transDate,
-                    valueDate: valueDate,
-                    description: cleanDescription,
-                    amount: transactionAmount,
-                    balance: Math.abs(balanceAmount),
-                    sourceFile: fileName,
-                    originalLine: line,
-                    rawAmount: transactionAmount.toString(),
-                    isDebit: !isCredit,
-                    isCredit: isCredit
-                  });
-                  
-                  transactionCount++;
-                  addLog(`Alt Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${transactionAmount}`, 'success');
-                }
-              }
-            }
-          }
+          addLog(`Alt Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)}`, 'success');
         }
       }
     }
     
-    // If still no transactions, add debug output to see what lines we have
+    // If still no transactions, show some debug info
     if (transactionCount === 0) {
-      addLog(`No transactions found. Showing first 10 lines for debugging:`, 'info');
-      for (let i = 0; i < Math.min(10, lines.length); i++) {
-        addLog(`Line ${i + 1}: "${lines[i]}"`, 'info');
-      }
-      
-      addLog(`Showing last 10 lines for debugging:`, 'info');
-      for (let i = Math.max(0, lines.length - 10); i < lines.length; i++) {
-        addLog(`Line ${i + 1}: "${lines[i]}"`, 'info');
-      }
+      addLog(`No transactions found. Text sample: "${cleanedText.substring(0, 200)}..."`, 'info');
     }
     
     // Final validation and sorting
