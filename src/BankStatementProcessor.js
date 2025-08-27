@@ -619,10 +619,30 @@ const BankStatementProcessor = () => {
     Object.entries(results).forEach(([category, transactions]) => {
       if (transactions.length > 0) {
         totalTransactions += transactions.length;
-        totalAmount += transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+        // Fix the calculation - ensure amounts are properly parsed as numbers
+        const categoryTotal = transactions.reduce((sum, t) => {
+          const amount = parseFloat(t.amount) || 0;
+          return sum + amount;
+        }, 0);
+        totalAmount += categoryTotal;
         categories++;
+        
+        // Debug log for troubleshooting
+        console.log(`Category ${category}: ${transactions.length} transactions, total: ${categoryTotal.toFixed(2)}`);
       }
     });
+    
+    // Add uncategorized transactions to total
+    if (uncategorizedData && uncategorizedData.length > 0) {
+      const uncategorizedTotal = uncategorizedData.reduce((sum, t) => {
+        const amount = parseFloat(t.amount) || 0;
+        return sum + amount;
+      }, 0);
+      totalAmount += uncategorizedTotal;
+      console.log(`Uncategorized: ${uncategorizedData.length} transactions, total: ${uncategorizedTotal.toFixed(2)}`);
+    }
+    
+    console.log(`Final totals: ${totalTransactions} transactions, MUR ${totalAmount.toFixed(2)}`);
     
     return { totalTransactions, totalAmount, categories };
   };
