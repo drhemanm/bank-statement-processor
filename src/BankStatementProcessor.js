@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Upload, FileText, Download, AlertCircle, CheckCircle, Loader } from 'lucide-react';
-import * as XLSX from 'xlsx';
 
 const BankStatementProcessor = () => {
   const [files, setFiles] = useState([]);
