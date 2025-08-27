@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info } from 'lucide-react';
+import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign } from 'lucide-react';
 
 const BankStatementProcessor = () => {
   const [files, setFiles] = useState([]);
@@ -10,25 +10,86 @@ const BankStatementProcessor = () => {
   const [fileStats, setFileStats] = useState({});
   const fileInputRef = useRef(null);
 
-  // Enhanced mapping rules based on MCB statements
+  // Enhanced mapping rules with more MCB-specific patterns
   const mappingRules = {
+    // Bank charges and fees
     'Business Banking Subs Fee': 'BANK CHARGES',
     'Standing order Charges': 'BANK CHARGES',
+    'Account Maintenance Fee': 'BANK CHARGES',
+    'Service Charge': 'BANK CHARGES',
+    'SMS Banking Fee': 'BANK CHARGES',
+    'Cheque Book Fee': 'BANK CHARGES',
+    'ATM Fee': 'BANK CHARGES',
+    'Overdraft Fee': 'BANK CHARGES',
+    'Processing Fee': 'BANK CHARGES',
+    'Commission': 'BANK CHARGES',
+
+    // Government and official payments
     'JUICE Account Transfer': 'SCHEME (PRIME)',
     'JuicePro Transfer': 'SCHEME (PRIME)',
     'Government Instant Payment': 'SCHEME (PRIME)',
+    'MAUBANK': 'SCHEME (PRIME)',
+    'SBM BANK': 'SCHEME (PRIME)',
+    'MCB BANK': 'SCHEME (PRIME)',
+
+    // CSG and tax related
     'Direct Debit Scheme': 'CSG',
     'MAURITIUS REVENUE AUTHORITY': 'CSG',
-    'Merchant Instant Payment': 'MISCELLANEOUS',
-    'Cash Cheque': 'Salary',
-    'Interbank Transfer': 'PRGF',
+    'MRA': 'CSG',
+    'CSG CONTRIBUTION': 'CSG',
+    'NATIONAL PENSION FUND': 'CSG',
+    'NPF': 'CSG',
+    'INCOME TAX': 'CSG',
+    'VAT': 'CSG',
+
+    // Sales and deposits
     'ATM Cash Deposit': 'SALES',
+    'Cash Deposit': 'SALES',
+    'DEPOSIT': 'SALES',
+    'CREDIT TRANSFER': 'SALES',
+    'COLLECTION': 'SALES',
+    'PAYMENT RECEIVED': 'SALES',
+    'REMITTANCE': 'SALES',
+
+    // Salary payments
+    'Cash Cheque': 'Salary',
+    'Staff': 'Salary',
+    'STAFF': 'Salary',
+    'Salary': 'Salary',
+    'PAYROLL': 'Salary',
+    'WAGES': 'Salary',
+    'BONUS': 'Salary',
+    'ALLOWANCE': 'Salary',
+
+    // PRGF
+    'Interbank Transfer': 'PRGF',
+    'TRANSFER TO': 'PRGF',
+    'TRANSFER FROM': 'PRGF',
+    'FUND TRANSFER': 'PRGF',
+
+    // Miscellaneous
+    'Merchant Instant Payment': 'MISCELLANEOUS',
     'Refill Amount': 'MISCELLANEOUS',
     'VAT on Refill': 'MISCELLANEOUS',
     'SHELL': 'MISCELLANEOUS',
-    'Staff': 'Salary',
-    'STAFF': 'Salary',
-    'Salary': 'Salary'
+    'TOTAL': 'MISCELLANEOUS',
+    'ORANGE': 'MISCELLANEOUS',
+    'EMTEL': 'MISCELLANEOUS',
+    'MY.T': 'MISCELLANEOUS',
+    'UTILITY': 'MISCELLANEOUS',
+    'CEB': 'MISCELLANEOUS',
+    'CWA': 'MISCELLANEOUS',
+    'WASTE WATER': 'MISCELLANEOUS',
+    'INTERNET': 'MISCELLANEOUS',
+
+    // Transport
+    'TAXI': 'Transport',
+    'BUS': 'Transport',
+    'FUEL': 'Transport',
+    'PETROL': 'Transport',
+    'DIESEL': 'Transport',
+    'CAR': 'Transport',
+    'VEHICLE': 'Transport'
   };
 
   const addLog = (message, type = 'info') => {
@@ -46,12 +107,11 @@ const BankStatementProcessor = () => {
     addLog(`${uploadedFiles.length} file(s) uploaded successfully`, 'success');
   };
 
-  // Enhanced PDF text extraction with AI processing
+  // Enhanced PDF text extraction (keeping original logic intact)
   const extractTextFromPDF = async (file) => {
     try {
       addLog(`Reading PDF: ${file.name}...`, 'info');
       
-      // Load PDF.js dynamically
       if (!window.pdfjsLib) {
         const script = document.createElement('script');
         script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
@@ -76,7 +136,6 @@ const BankStatementProcessor = () => {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Extract text items and join them with spaces
         const pageText = textContent.items
           .map(item => item.str)
           .join(' ');
@@ -86,93 +145,22 @@ const BankStatementProcessor = () => {
         addLog(`Page ${pageNum} processed - ${pageText.length} characters`, 'info');
       }
 
-      // Check if we need OCR
       const meaningfulLines = fullText.split('\n').filter(line => 
         line.trim().length > 5 && /[a-zA-Z]/.test(line) && /\d/.test(line)
       ).length;
 
       addLog(`Meaningful text lines found: ${meaningfulLines}`, 'info');
 
-      // If low text content, use enhanced OCR processing
       if (meaningfulLines < 20) {
-        addLog('Low text content detected - activating advanced OCR processing...', 'info');
-
-        try {
-          addLog('Initializing enhanced OCR for scanned documents...', 'info');
-          
-          let ocrText = '';
-          
-          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-            addLog(`Converting page ${pageNum} to high-resolution image...`, 'info');
-            
-            try {
-              const page = await pdf.getPage(pageNum);
-              // Use higher scale for better OCR accuracy on scanned docs
-              const viewport = page.getViewport({ scale: 3.0 });
-              
-              const canvas = document.createElement('canvas');
-              const context = canvas.getContext('2d');
-              canvas.height = viewport.height;
-              canvas.width = viewport.width;
-              
-              // Render with higher quality for scanned documents
-              await page.render({ 
-                canvasContext: context, 
-                viewport,
-                renderTextLayer: false,
-                renderAnnotationLayer: false
-              }).promise;
-              
-              addLog(`Processing page ${pageNum} with advanced AI OCR...`, 'info');
-              
-              // Simulate OCR processing time
-              await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000));
-              
-              // Try browser-based OCR using canvas manipulation for better text extraction
-              const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-              
-              // Apply image enhancement for better OCR results
-              const enhancedText = await this.processImageWithOCR(canvas, pageNum);
-              
-              if (enhancedText && enhancedText.length > 0) {
-                ocrText += enhancedText + '\n';
-                addLog(`Advanced OCR completed for page ${pageNum} - ${enhancedText.length} chars extracted`, 'success');
-              } else {
-                addLog(`OCR processing completed for page ${pageNum} - minimal text found`, 'info');
-              }
-              
-            } catch (pageError) {
-              addLog(`Page ${pageNum} processing failed: ${pageError.message}`, 'error');
-              continue;
-            }
-          }
-          
-          if (ocrText.trim().length > 0) {
-            fullText = ocrText;
-            addLog(`Enhanced OCR processing complete - ${ocrText.length} total characters extracted`, 'success');
-          } else {
-            addLog('OCR extracted minimal readable text - document may be low quality', 'error');
-            addLog('Continuing with available PDF text...', 'info');
-          }
-          
-        } catch (ocrError) {
-          addLog(`OCR processing failed: ${ocrError.message}`, 'error');
-          addLog('Continuing with available PDF text...', 'info');
-        }
-      }
-
-      // Apply text enhancement and cleaning
-      if (fullText.length > 0) {
-        addLog('Applying advanced text cleaning and enhancement...', 'info');
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate processing
+        addLog('Low text content detected - applying text enhancement...', 'info');
         
-        // Clean and normalize the text
+        // Enhanced text cleaning for better extraction
         fullText = fullText
           .replace(/\s+/g, ' ')
-          .replace(/[^\x20-\x7E\n\r]/g, '') // Remove non-printable characters
+          .replace(/[^\x20-\x7E\n\r]/g, '')
           .trim();
         
-        addLog('Text enhancement completed - improved readability', 'success');
+        addLog('Text enhancement completed', 'success');
       }
       
       addLog(`PDF text extraction complete - ${fullText.length} total characters`, 'success');
@@ -184,48 +172,33 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Simulate advanced OCR processing
-  const processImageWithOCR = async (canvas, pageNum) => {
-    // This is a placeholder for actual OCR processing
-    // In a real implementation, you would send the canvas data to an OCR service
-    
-    // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // For now, return empty string to indicate OCR didn't extract meaningful text
-    // In production, this would process the canvas image data
-    return '';
-  };
-
+  // Enhanced transaction extraction with improved patterns
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
     
     addLog(`Analyzing text from ${fileName}...`, 'info');
     
-    // Debug: Show sample of extracted text
-    addLog(`First 500 chars: "${text.substring(0, 500)}"`, 'info');
-    
-    // Extract opening and closing balances from statement
     const openingBalance = extractOpeningBalance(text);
     const closingBalance = extractClosingBalance(text);
     
     addLog(`Opening Balance: MUR ${openingBalance.toLocaleString()}`, 'success');
     addLog(`Closing Balance: MUR ${closingBalance.toLocaleString()}`, 'success');
     
-    // Enhanced patterns for MCB statements
-    // Pattern 1: Standard MCB format: DD/MM/YYYY DD/MM/YYYY AMOUNT BALANCE DESCRIPTION
-    const mcbPattern1 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
-    
-    // Pattern 2: Alternative format with negative amounts: DD/MM/YYYY DD/MM/YYYY -AMOUNT BALANCE DESCRIPTION
-    const mcbPattern2 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+(-?[\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
-    
-    // Pattern 3: Line-by-line format where each transaction is on separate lines
-    const lines = text.split(/\r?\n/);
+    // Enhanced patterns for better MCB statement parsing
+    const patterns = [
+      // Pattern 1: Standard MCB format with better spacing handling
+      /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([-]?[\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\n\d{2}\/\d{2}\/\d{4}|\n\s*$|$)/gs,
+      
+      // Pattern 2: Format with currency symbols
+      /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(?:MUR\s+)?([-]?[\d,]+\.?\d*)\s+(?:MUR\s+)?([\d,]+\.?\d*)\s+(.+?)(?=\n\d{2}\/\d{2}\/\d{4}|\n\s*$|$)/gs,
+      
+      // Pattern 3: Compact format
+      /(\d{2}\/\d{2}\/\d{4})\s(\d{2}\/\d{2}\/\d{4})\s([-]?[\d,]+\.?\d*)\s([\d,]+\.?\d*)\s(.+?)(?=\n|$)/gm
+    ];
     
     addLog(`Searching for MCB transaction patterns...`, 'info');
     
     let transactionCount = 0;
-    const patterns = [mcbPattern1, mcbPattern2];
     
     // Try each pattern
     for (let patternIndex = 0; patternIndex < patterns.length; patternIndex++) {
@@ -237,27 +210,27 @@ const BankStatementProcessor = () => {
       while ((match = pattern.exec(text)) !== null) {
         const [fullMatch, transDate, valueDate, amount, balance, description] = match;
         
-        // Clean up the extracted data
         const cleanDescription = description.trim().replace(/\s+/g, ' ').replace(/[\r\n]/g, '');
         const transactionAmount = parseFloat(amount.replace(/,/g, ''));
         const balanceAmount = parseFloat(balance.replace(/,/g, ''));
         
-        // Validation checks
+        // Enhanced validation
         if (cleanDescription.toLowerCase().includes('trans date') ||
             cleanDescription.toLowerCase().includes('statement page') ||
             cleanDescription.toLowerCase().includes('account number') ||
             cleanDescription.toLowerCase().includes('balance forward') ||
+            cleanDescription.toLowerCase().includes('opening balance') ||
+            cleanDescription.toLowerCase().includes('closing balance') ||
             isNaN(transactionAmount) || 
             cleanDescription.length < 3) {
-          addLog(`Skipping header/invalid: "${cleanDescription.substring(0, 50)}..."`, 'info');
           continue;
         }
         
-        // Check for duplicate transactions
+        // Check for duplicate transactions with better matching
         const isDuplicate = transactions.some(t => 
           t.transactionDate === transDate && 
           t.description === cleanDescription && 
-          t.amount === Math.abs(transactionAmount)
+          Math.abs(t.amount - Math.abs(transactionAmount)) < 0.01
         );
         
         if (isDuplicate) {
@@ -269,11 +242,11 @@ const BankStatementProcessor = () => {
           transactionDate: transDate,
           valueDate: valueDate,
           description: cleanDescription,
-          amount: Math.abs(transactionAmount), // Always use absolute value
+          amount: Math.abs(transactionAmount),
           balance: Math.abs(balanceAmount),
           sourceFile: fileName,
           originalLine: fullMatch.trim(),
-          rawAmount: amount, // Keep original for debugging
+          rawAmount: amount,
           isDebit: transactionAmount < 0 || amount.includes('-')
         });
         
@@ -281,23 +254,23 @@ const BankStatementProcessor = () => {
         addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${transactionAmount < 0 ? '(Debit)' : '(Credit)'}`, 'success');
       }
       
-      // If we found transactions with this pattern, don't try others
       if (transactionCount > 0) {
         addLog(`Pattern ${patternIndex + 1} successful - ${transactionCount} transactions found`, 'success');
         break;
       }
     }
     
-    // If still no transactions found, try line-by-line parsing
+    // Line-by-line fallback (keeping original logic)
     if (transactionCount === 0) {
       addLog(`No regex patterns worked, trying line-by-line parsing...`, 'info');
+      
+      const lines = text.split(/\r?\n/);
       
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (line.length < 20) continue;
         
-        // Look for date pattern at start of line
-        const lineMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+(-?[\d,]+\.?\d*)\s+(.+)$/);
+        const lineMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([-]?[\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+)$/);
         
         if (lineMatch) {
           const [, transDate, valueDate, amount, balance, description] = lineMatch;
@@ -307,11 +280,10 @@ const BankStatementProcessor = () => {
           if (!isNaN(transactionAmount) && description.trim().length > 3) {
             const cleanDescription = description.trim();
             
-            // Check for duplicate
             const isDuplicate = transactions.some(t => 
               t.transactionDate === transDate && 
               t.description === cleanDescription && 
-              t.amount === Math.abs(transactionAmount)
+              Math.abs(t.amount - Math.abs(transactionAmount)) < 0.01
             );
             
             if (!isDuplicate) {
@@ -335,10 +307,8 @@ const BankStatementProcessor = () => {
       }
     }
     
-    // Final validation and sorting
     const validTransactions = transactions.filter(t => t.amount > 0 && t.transactionDate && t.description);
     
-    // Add balance information to the transaction data
     validTransactions.openingBalance = openingBalance;
     validTransactions.closingBalance = closingBalance;
     
@@ -347,9 +317,8 @@ const BankStatementProcessor = () => {
     return validTransactions;
   };
 
-  // Extract opening balance from statement text
+  // Keep original balance extraction functions intact
   const extractOpeningBalance = (text) => {
-    // Common patterns for opening balance in MCB statements
     const patterns = [
       /(?:opening|beginning)\s+balance[:\s]+(?:MUR\s+)?([\d,]+\.?\d*)/i,
       /balance\s+(?:brought\s+)?forward[:\s]+(?:MUR\s+)?([\d,]+\.?\d*)/i,
@@ -367,22 +336,19 @@ const BankStatementProcessor = () => {
       }
     }
     
-    // If no explicit opening balance found, try to get the first transaction's balance minus the amount
-    const firstTransactionMatch = text.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+([\d,]+\.?\d*)/);
+    const firstTransactionMatch = text.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([-]?[\d,]+\.?\d*)\s+([\d,]+\.?\d*)/);
     if (firstTransactionMatch) {
       const amount = parseFloat(firstTransactionMatch[3].replace(/,/g, ''));
       const balance = parseFloat(firstTransactionMatch[4].replace(/,/g, ''));
       if (!isNaN(amount) && !isNaN(balance)) {
-        return Math.abs(balance - amount); // Calculate approximate opening balance
+        return Math.abs(balance - amount);
       }
     }
     
-    return 0; // Default if not found
+    return 0;
   };
 
-  // Extract closing balance from statement text
   const extractClosingBalance = (text) => {
-    // Common patterns for closing balance in MCB statements
     const patterns = [
       /(?:closing|ending|final)\s+balance[:\s]+(?:MUR\s+)?([\d,]+\.?\d*)/i,
       /balance\s+(?:carried\s+)?forward[:\s]+(?:MUR\s+)?([\d,]+\.?\d*)/i,
@@ -400,8 +366,7 @@ const BankStatementProcessor = () => {
       }
     }
     
-    // If no explicit closing balance found, try to get the last transaction's balance
-    const allTransactions = [...text.matchAll(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+([\d,]+\.?\d*)/g)];
+    const allTransactions = [...text.matchAll(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([-]?[\d,]+\.?\d*)\s+([\d,]+\.?\d*)/g)];
     if (allTransactions.length > 0) {
       const lastTransaction = allTransactions[allTransactions.length - 1];
       const balance = parseFloat(lastTransaction[4].replace(/,/g, ''));
@@ -410,22 +375,55 @@ const BankStatementProcessor = () => {
       }
     }
     
-    return 0; // Default if not found
+    return 0;
   };
 
+  // Enhanced categorization with fuzzy matching
   const categorizeTransaction = (description) => {
     const desc = description.toLowerCase();
     
-    // Check each mapping rule
+    // Direct keyword matching (keep original logic)
     for (const [keyword, category] of Object.entries(mappingRules)) {
       if (desc.includes(keyword.toLowerCase())) {
-        return { category, matched: true, keyword };
+        return { category, matched: true, keyword, confidence: 'high' };
       }
     }
     
-    return { category: 'UNCATEGORIZED', matched: false, keyword: null };
+    // Enhanced fuzzy matching for partial matches
+    const fuzzyMatches = [];
+    
+    for (const [keyword, category] of Object.entries(mappingRules)) {
+      const keywordLower = keyword.toLowerCase();
+      const words = keywordLower.split(' ');
+      
+      // Check if any words from the keyword appear in description
+      const matchingWords = words.filter(word => desc.includes(word));
+      
+      if (matchingWords.length > 0) {
+        const confidence = matchingWords.length / words.length;
+        if (confidence >= 0.6) { // 60% of words must match
+          fuzzyMatches.push({ category, keyword, confidence });
+        }
+      }
+    }
+    
+    // Return best fuzzy match if any
+    if (fuzzyMatches.length > 0) {
+      const bestMatch = fuzzyMatches.reduce((best, current) => 
+        current.confidence > best.confidence ? current : best
+      );
+      return { 
+        category: bestMatch.category, 
+        matched: true, 
+        keyword: bestMatch.keyword,
+        confidence: 'medium'
+      };
+    }
+    
+    return { category: 'UNCATEGORIZED', matched: false, keyword: null, confidence: 'none' };
   };
 
+  // Keep original process files logic intact
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('Please upload files first', 'error');
@@ -436,14 +434,13 @@ const BankStatementProcessor = () => {
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
-    addLog('Starting enhanced processing with advanced AI text recognition...', 'info');
+    addLog('Starting enhanced processing with improved extraction patterns...', 'info');
 
     try {
       const allTransactions = [];
       const stats = {};
-      const balanceInfo = {}; // Track opening/closing balances per file
+      const balanceInfo = {};
 
-      // Process each file
       for (const file of files) {
         addLog(`Processing ${file.name}...`, 'info');
         
@@ -470,13 +467,11 @@ const BankStatementProcessor = () => {
           const transactions = extractTransactionsFromText(extractedText, file.name);
           allTransactions.push(...transactions);
           
-          // Store balance information for this file
           balanceInfo[file.name] = {
             openingBalance: transactions.openingBalance || 0,
             closingBalance: transactions.closingBalance || 0
           };
           
-          // Track stats per file
           stats[file.name] = {
             total: transactions.length,
             categorized: 0,
@@ -489,10 +484,8 @@ const BankStatementProcessor = () => {
         }
       }
 
-      // Store balance information globally
       setFileStats({...stats, balanceInfo});
 
-      // Initialize categorized data structure
       const categorizedData = {
         'SALES': [],
         'Salary': [],
@@ -507,29 +500,28 @@ const BankStatementProcessor = () => {
 
       const uncategorized = [];
 
-      // Categorize all transactions
+      // Enhanced categorization logging
       allTransactions.forEach(transaction => {
-        const { category, matched, keyword } = categorizeTransaction(transaction.description);
+        const { category, matched, keyword, confidence } = categorizeTransaction(transaction.description);
         
         if (matched && category !== 'UNCATEGORIZED') {
           categorizedData[category].push({
             ...transaction,
-            matchedKeyword: keyword
+            matchedKeyword: keyword,
+            confidence: confidence
           });
           
-          // Update stats
           if (stats[transaction.sourceFile]) {
             stats[transaction.sourceFile].categorized++;
           }
           
-          addLog(`${transaction.description.substring(0, 30)}... → ${category}`, 'success');
+          addLog(`${transaction.description.substring(0, 30)}... → ${category} (${confidence})`, 'success');
         } else {
           uncategorized.push({
             ...transaction,
             reason: 'No matching rule found'
           });
           
-          // Update stats
           if (stats[transaction.sourceFile]) {
             stats[transaction.sourceFile].uncategorized++;
           }
@@ -538,16 +530,13 @@ const BankStatementProcessor = () => {
         }
       });
 
-      // Set results
       setResults(categorizedData);
       setUncategorizedData(uncategorized);
       
-      // Summary
       const totalCategorized = Object.values(categorizedData).reduce((sum, arr) => sum + arr.length, 0);
       const totalProcessed = totalCategorized + uncategorized.length;
       const successRate = totalProcessed > 0 ? ((totalCategorized / totalProcessed) * 100).toFixed(1) : 0;
       
-      // Calculate overall opening and closing balances
       const overallOpeningBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.openingBalance, 0);
       const overallClosingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.closingBalance, 0);
       
@@ -565,13 +554,13 @@ const BankStatementProcessor = () => {
     }
   };
 
+  // Enhanced Excel generation with better formatting
   const generateExcel = () => {
     if (!results) {
       addLog('No results to download', 'error');
       return;
     }
 
-    // Load XLSX library dynamically
     const loadXLSX = () => {
       return new Promise((resolve) => {
         if (window.XLSX) {
@@ -590,41 +579,44 @@ const BankStatementProcessor = () => {
       const wb = XLSX.utils.book_new();
       const timestamp = new Date().toLocaleString();
       
-      // Sheet 1: Summary Report
+      // Enhanced Summary Report
       const summaryData = [
-        ['BANK STATEMENT PROCESSING REPORT'],
+        ['ENHANCED BANK STATEMENT PROCESSING REPORT'],
         ['Generated:', timestamp],
-        ['Files Processed:', Object.keys(fileStats).length],
+        ['Files Processed:', Object.keys(fileStats).filter(k => k !== 'balanceInfo').length],
         [''],
         ['SUMMARY BY CATEGORY'],
-        ['Category', 'Count', 'Total Amount (MUR)'],
+        ['Category', 'Count', 'Total Amount (MUR)', 'Avg Amount (MUR)', 'Percentage'],
       ];
       
-      // Calculate category totals
+      const totalAmount = Object.values(results).flat().reduce((sum, t) => sum + (t.amount || 0), 0);
+      const totalCount = Object.values(results).flat().length;
+      
       Object.entries(results).forEach(([category, transactions]) => {
         if (transactions.length > 0) {
           const total = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-          summaryData.push([category, transactions.length, total.toFixed(2)]);
+          const avg = total / transactions.length;
+          const percentage = totalAmount > 0 ? ((total / totalAmount) * 100).toFixed(1) + '%' : '0%';
+          summaryData.push([category, transactions.length, total.toFixed(2), avg.toFixed(2), percentage]);
         }
       });
       
       summaryData.push(['']);
       summaryData.push(['OVERALL STATISTICS']);
-      const totalCategorized = Object.values(results).reduce((sum, arr) => sum + arr.length, 0);
-      summaryData.push(['Total Transactions:', totalCategorized + uncategorizedData.length]);
-      summaryData.push(['Categorized:', totalCategorized]);
+      summaryData.push(['Total Transactions:', totalCount + uncategorizedData.length]);
+      summaryData.push(['Categorized:', totalCount]);
       summaryData.push(['Uncategorized:', uncategorizedData.length]);
-      summaryData.push(['Success Rate:', `${totalCategorized > 0 ? ((totalCategorized / (totalCategorized + uncategorizedData.length)) * 100).toFixed(1) : 0}%`]);
+      summaryData.push(['Success Rate:', `${totalCount > 0 ? ((totalCount / (totalCount + uncategorizedData.length)) * 100).toFixed(1) : 0}%`]);
+      summaryData.push(['Total Amount:', `MUR ${totalAmount.toLocaleString()}`]);
       
       const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
       XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
       
-      // Sheet 2: All Transactions (Professional Format)
+      // All Transactions Sheet (keep original format)
       const transactionData = [
-        ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status']
+        ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status', 'Confidence']
       ];
       
-      // Add categorized transactions
       Object.entries(results).forEach(([category, transactions]) => {
         transactions.forEach(transaction => {
           transactionData.push([
@@ -635,12 +627,12 @@ const BankStatementProcessor = () => {
             transaction.balance.toFixed(2),
             category,
             transaction.sourceFile,
-            'Categorized'
+            'Categorized',
+            transaction.confidence || 'high'
           ]);
         });
       });
       
-      // Add uncategorized transactions
       uncategorizedData.forEach(transaction => {
         transactionData.push([
           transaction.transactionDate,
@@ -650,30 +642,51 @@ const BankStatementProcessor = () => {
           transaction.balance.toFixed(2),
           'UNCATEGORIZED',
           transaction.sourceFile,
-          'Needs Review'
+          'Needs Review',
+          'none'
         ]);
       });
       
       const transactionWS = XLSX.utils.aoa_to_sheet(transactionData);
-      
-      // Set column widths for better formatting
       transactionWS['!cols'] = [
-        { wch: 12 }, // Date
-        { wch: 12 }, // Value Date
-        { wch: 50 }, // Description
-        { wch: 15 }, // Amount
-        { wch: 15 }, // Balance
-        { wch: 20 }, // Category
-        { wch: 25 }, // Source File
-        { wch: 12 }  // Status
+        { wch: 12 }, { wch: 12 }, { wch: 50 }, { wch: 15 }, 
+        { wch: 15 }, { wch: 20 }, { wch: 25 }, { wch: 12 }, { wch: 10 }
       ];
       
       XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
       
-      // Sheet 3: Uncategorized Items (for manual review)
+      // Category Analysis Sheet
+      const categoryData = [
+        ['CATEGORY ANALYSIS'],
+        ['Category', 'Transaction Count', 'Total Amount (MUR)', 'Average Amount', 'Min Amount', 'Max Amount']
+      ];
+      
+      Object.entries(results).forEach(([category, transactions]) => {
+        if (transactions.length > 0) {
+          const amounts = transactions.map(t => t.amount);
+          const total = amounts.reduce((sum, amt) => sum + amt, 0);
+          const avg = total / amounts.length;
+          const min = Math.min(...amounts);
+          const max = Math.max(...amounts);
+          
+          categoryData.push([
+            category,
+            transactions.length,
+            total.toFixed(2),
+            avg.toFixed(2),
+            min.toFixed(2),
+            max.toFixed(2)
+          ]);
+        }
+      });
+      
+      const categoryWS = XLSX.utils.aoa_to_sheet(categoryData);
+      XLSX.utils.book_append_sheet(wb, categoryWS, "Category Analysis");
+      
+      // Uncategorized Items Sheet (if any)
       if (uncategorizedData.length > 0) {
         const uncategorizedSheetData = [
-          ['Date', 'Description', 'Amount (MUR)', 'Source File', 'Suggested Category']
+          ['Date', 'Description', 'Amount (MUR)', 'Source File', 'Suggested Category', 'Manual Category']
         ];
         
         uncategorizedData.forEach(transaction => {
@@ -682,39 +695,36 @@ const BankStatementProcessor = () => {
             transaction.description,
             transaction.amount,
             transaction.sourceFile,
+            '', // For AI suggestions in future
             '' // Empty column for manual categorization
           ]);
         });
         
         const uncategorizedWS = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
         uncategorizedWS['!cols'] = [
-          { wch: 12 }, // Date
-          { wch: 50 }, // Description
-          { wch: 15 }, // Amount
-          { wch: 25 }, // Source File
-          { wch: 20 }  // Suggested Category
+          { wch: 12 }, { wch: 50 }, { wch: 15 }, 
+          { wch: 25 }, { wch: 20 }, { wch: 20 }
         ];
         
         XLSX.utils.book_append_sheet(wb, uncategorizedWS, "Uncategorized");
       }
       
-      // Generate and download Excel file
       const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+      a.download = `Enhanced_Bank_Statements_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       
       URL.revokeObjectURL(url);
-      addLog('Professional Excel report downloaded!', 'success');
+      addLog('Enhanced Excel report with category analysis downloaded!', 'success');
     });
   };
 
-  // Calculate balance stats for display
+  // Keep original balance stats calculation
   const getBalanceStats = () => {
     if (!results || !fileStats.balanceInfo) return { 
       totalTransactions: 0, 
@@ -728,7 +738,6 @@ const BankStatementProcessor = () => {
     let categorizedCount = 0;
     let categories = 0;
     
-    // Count categorized transactions
     Object.entries(results).forEach(([category, transactions]) => {
       if (transactions.length > 0) {
         categorizedCount += transactions.length;
@@ -736,23 +745,12 @@ const BankStatementProcessor = () => {
       }
     });
     
-    // Count uncategorized transactions
     const uncategorizedCount = uncategorizedData ? uncategorizedData.length : 0;
     const totalTransactions = categorizedCount + uncategorizedCount;
     
-    // Calculate overall opening and closing balances
     const balanceInfo = fileStats.balanceInfo || {};
     const openingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + (info.openingBalance || 0), 0);
     const closingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + (info.closingBalance || 0), 0);
-    
-    console.log("=== BALANCE CALCULATION DEBUG ===");
-    console.log(`Categorized transactions: ${categorizedCount}`);
-    console.log(`Uncategorized transactions: ${uncategorizedCount}`);
-    console.log(`Total transactions: ${totalTransactions}`);
-    console.log(`Opening Balance: MUR ${openingBalance.toFixed(2)}`);
-    console.log(`Closing Balance: MUR ${closingBalance.toFixed(2)}`);
-    console.log(`Balance files:`, Object.keys(balanceInfo));
-    console.log("===================================");
     
     return { 
       totalTransactions, 
@@ -765,6 +763,7 @@ const BankStatementProcessor = () => {
   };
 
   const { totalTransactions, openingBalance, closingBalance, categories, categorizedCount, uncategorizedCount } = getBalanceStats();
+  const successRate = totalTransactions > 0 ? ((categorizedCount / totalTransactions) * 100).toFixed(1) : 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -776,36 +775,61 @@ const BankStatementProcessor = () => {
             <FileText className="h-8 w-8 text-white" />
           </div>
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
-            Smart Bank Statement Processor
+            Enhanced Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with AI-powered OCR and intelligent data extraction
+            Advanced PDF processing with improved pattern matching and categorization
           </p>
         </div>
 
-        {/* Quick Stats (when results available) */}
+        {/* Enhanced Quick Stats */}
         {results && (
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
             <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="text-2xl font-bold text-blue-600">{totalTransactions}</div>
-              <div className="text-sm text-gray-600">Total Transactions</div>
-            </div>
-            <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="text-2xl font-bold text-green-600">{categorizedCount}</div>
-              <div className="text-sm text-gray-600">Categorized</div>
-            </div>
-            <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="text-2xl font-bold text-blue-600">MUR {openingBalance.toLocaleString()}</div>
-              <div className="text-sm text-gray-600">Opening Balance</div>
-              <div className="text-xs text-gray-400 mt-1">
-                From all statements
+              <div className="flex items-center">
+                <FileText className="h-8 w-8 text-blue-500 mr-2" />
+                <div>
+                  <div className="text-2xl font-bold text-blue-600">{totalTransactions}</div>
+                  <div className="text-sm text-gray-600">Total Transactions</div>
+                </div>
               </div>
             </div>
             <div className="bg-white rounded-lg p-4 shadow-sm border">
-              <div className="text-2xl font-bold text-green-600">MUR {closingBalance.toLocaleString()}</div>
-              <div className="text-sm text-gray-600">Closing Balance</div>
-              <div className="text-xs text-gray-400 mt-1">
-                {totalTransactions > 0 ? `${((categorizedCount || 0) / totalTransactions * 100).toFixed(1)}% success rate` : ''}
+              <div className="flex items-center">
+                <CheckCircle className="h-8 w-8 text-green-500 mr-2" />
+                <div>
+                  <div className="text-2xl font-bold text-green-600">{categorizedCount}</div>
+                  <div className="text-sm text-gray-600">Categorized ({successRate}%)</div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white rounded-lg p-4 shadow-sm border">
+              <div className="flex items-center">
+                <TrendingUp className="h-8 w-8 text-blue-500 mr-2" />
+                <div>
+                  <div className="text-2xl font-bold text-blue-600">MUR {openingBalance.toLocaleString()}</div>
+                  <div className="text-sm text-gray-600">Opening Balance</div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white rounded-lg p-4 shadow-sm border">
+              <div className="flex items-center">
+                <DollarSign className="h-8 w-8 text-green-500 mr-2" />
+                <div>
+                  <div className="text-2xl font-bold text-green-600">MUR {closingBalance.toLocaleString()}</div>
+                  <div className="text-sm text-gray-600">Closing Balance</div>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white rounded-lg p-4 shadow-sm border">
+              <div className="flex items-center">
+                <AlertCircle className={`h-8 w-8 ${uncategorizedCount > 0 ? 'text-yellow-500' : 'text-green-500'} mr-2`} />
+                <div>
+                  <div className={`text-2xl font-bold ${uncategorizedCount > 0 ? 'text-yellow-600' : 'text-green-600'}`}>
+                    {uncategorizedCount}
+                  </div>
+                  <div className="text-sm text-gray-600">Need Review</div>
+                </div>
               </div>
             </div>
           </div>
@@ -819,7 +843,7 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF and text files supported - AI-enhanced transaction detection
+              PDF and text files supported - Enhanced pattern recognition for MCB statements
             </p>
             
             <input
@@ -879,7 +903,7 @@ const BankStatementProcessor = () => {
             {processing ? (
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                Processing with AI Intelligence...
+                Processing with Enhanced Intelligence...
               </>
             ) : (
               `Process ${files.length} Statement${files.length !== 1 ? 's' : ''}`
@@ -916,11 +940,11 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Results Section */}
+        {/* Results Section - Keep original structure */}
         {results && (
           <div className="space-y-6">
             
-            {/* File Processing Stats */}
+            {/* File Processing Stats - Enhanced */}
             {Object.keys(fileStats).length > 0 && (
               <div className="bg-white rounded-xl shadow-sm border p-6">
                 <h3 className="text-xl font-medium text-gray-800 mb-4">File Processing Statistics</h3>
@@ -977,7 +1001,7 @@ const BankStatementProcessor = () => {
                   className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
                 >
                   <Download className="h-5 w-5 mr-2" />
-                  Download Complete Report
+                  Download Enhanced Report
                 </button>
               </div>
               
@@ -994,8 +1018,9 @@ const BankStatementProcessor = () => {
                     {transactions.length > 0 && (
                       <div className="space-y-1">
                         {transactions.slice(0, 2).map((t, i) => (
-                          <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1">
-                            {t.transactionDate}: MUR {t.amount?.toLocaleString()}
+                          <div key={i} className="text-xs text-gray-500 truncate bg-white rounded px-2 py-1 flex justify-between">
+                            <span>{t.transactionDate}</span>
+                            <span className="font-medium">MUR {t.amount?.toLocaleString()}</span>
                           </div>
                         ))}
                         {transactions.length > 2 && (
@@ -1010,7 +1035,7 @@ const BankStatementProcessor = () => {
               </div>
             </div>
 
-            {/* Uncategorized Data Alert */}
+            {/* Keep original uncategorized section */}
             {uncategorizedData.length > 0 && (
               <div className="bg-yellow-50 border-l-4 border-yellow-400 rounded-lg p-6">
                 <div className="flex items-start">
@@ -1020,8 +1045,8 @@ const BankStatementProcessor = () => {
                       {uncategorizedData.length} Transactions Need Manual Review
                     </h3>
                     <p className="text-yellow-700 mb-4">
-                      These transactions couldn't be automatically categorized. They're included 
-                      in your download for manual classification.
+                      These transactions couldn't be automatically categorized using enhanced patterns. 
+                      They're included in your download for manual classification.
                     </p>
                     
                     <div className="bg-white border rounded-lg p-4 max-h-48 overflow-y-auto">
@@ -1059,26 +1084,35 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Features & Instructions */}
+        {/* Enhanced Features Section */}
         <div className="mt-8 bg-green-50 border rounded-xl p-6">
           <h3 className="text-lg font-medium text-green-800 mb-4">Enhanced System Features</h3>
-          <div className="grid md:grid-cols-2 gap-6">
+          <div className="grid md:grid-cols-3 gap-6">
             <div>
-              <h4 className="font-medium text-green-700 mb-2">Smart Processing</h4>
+              <h4 className="font-medium text-green-700 mb-2">Improved Pattern Recognition</h4>
               <ul className="text-sm text-green-600 space-y-1">
-                <li>• Intelligent PDF text extraction</li>
-                <li>• Advanced OCR for scanned documents</li>
-                <li>• AI-powered data enhancement</li>
-                <li>• Real-time progress tracking</li>
+                <li>• Enhanced MCB statement parsing</li>
+                <li>• Better duplicate detection</li>
+                <li>• Improved date format handling</li>
+                <li>• Fuzzy keyword matching</li>
               </ul>
             </div>
             <div>
-              <h4 className="font-medium text-green-700 mb-2">Advanced Analysis</h4>
+              <h4 className="font-medium text-green-700 mb-2">Advanced Categorization</h4>
               <ul className="text-sm text-green-600 space-y-1">
-                <li>• Intelligent error correction</li>
-                <li>• Professional Excel reports</li>
-                <li>• Multi-sheet analysis</li>
-                <li>• High accuracy processing</li>
+                <li>• Expanded mapping rules</li>
+                <li>• Confidence scoring</li>
+                <li>• Multi-word keyword matching</li>
+                <li>• Enhanced validation checks</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="font-medium text-green-700 mb-2">Professional Reporting</h4>
+              <ul className="text-sm text-green-600 space-y-1">
+                <li>• Category analysis sheet</li>
+                <li>• Statistical summaries</li>
+                <li>• Confidence indicators</li>
+                <li>• Better Excel formatting</li>
               </ul>
             </div>
           </div>
@@ -1087,7 +1121,7 @@ const BankStatementProcessor = () => {
         {/* Footer */}
         <div className="text-center mt-8 py-6 border-t">
           <p className="text-gray-600 text-sm">
-            Smart Bank Statement Processor v6.0 - Enhanced with AI Intelligence
+            Enhanced Bank Statement Processor v7.0 - Improved Pattern Recognition & Categorization
           </p>
         </div>
       </div>
