@@ -93,12 +93,21 @@ const BankStatementProcessor = () => {
     logMessage(`Processing ${file.name}...`);
 
     try {
-      // Load PDF.js
-      const pdfjsLib = window.pdfjsLib || await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+      // Load PDF.js dynamically
       if (!window.pdfjsLib) {
-        window.pdfjsLib = pdfjsLib;
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        document.head.appendChild(script);
+        
+        await new Promise((resolve) => {
+          script.onload = () => {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            resolve();
+          };
+        });
       }
+      
+      const pdfjsLib = window.pdfjsLib;
 
       // Convert file to ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
@@ -132,8 +141,18 @@ const BankStatementProcessor = () => {
       if (meaningfulLines < 20) {
         logMessage('Low text content detected - switching to OCR mode...');
 
-        // Load Tesseract.js
-        const { createWorker } = await import('https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js');
+        // Load Tesseract.js dynamically
+        if (!window.Tesseract) {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js';
+          document.head.appendChild(script);
+          
+          await new Promise((resolve) => {
+            script.onload = () => resolve();
+          });
+        }
+        
+        const { createWorker } = window.Tesseract;
         const worker = await createWorker('eng');
 
         let ocrText = '';
@@ -289,8 +308,22 @@ const BankStatementProcessor = () => {
   };
 
   const generateReport = (allTransactions, allFiles) => {
-    // Create Excel workbook with multiple sheets
-    import('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js').then(XLSX => {
+    // Load XLSX library dynamically
+    const loadXLSX = () => {
+      return new Promise((resolve) => {
+        if (window.XLSX) {
+          resolve(window.XLSX);
+          return;
+        }
+        
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        script.onload = () => resolve(window.XLSX);
+        document.head.appendChild(script);
+      });
+    };
+    
+    loadXLSX().then(XLSX => {
       const wb = XLSX.utils.book_new();
       const timestamp = new Date().toLocaleString();
       
