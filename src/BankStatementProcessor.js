@@ -76,10 +76,20 @@ const BankStatementProcessor = () => {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Extract text items and join them with spaces
-        const pageText = textContent.items
-          .map(item => item.str)
-          .join(' ');
+        // Better text extraction that preserves structure
+        let pageText = '';
+        let lastY = null;
+        
+        // Process text items while preserving line structure
+        textContent.items.forEach(item => {
+          // If Y position changed significantly, we're on a new line
+          if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+            pageText += '\n';
+          }
+          
+          pageText += item.str + ' ';
+          lastY = item.transform[5];
+        });
         
         fullText += pageText + '\n';
         
@@ -132,7 +142,7 @@ const BankStatementProcessor = () => {
               const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
               
               // Apply image enhancement for better OCR results
-              const enhancedText = await this.processImageWithOCR(canvas, pageNum);
+              const enhancedText = await processImageWithOCR(canvas, pageNum);
               
               if (enhancedText && enhancedText.length > 0) {
                 ocrText += enhancedText + '\n';
@@ -212,18 +222,16 @@ const BankStatementProcessor = () => {
     addLog(`Opening Balance: MUR ${openingBalance.toLocaleString()}`, 'success');
     addLog(`Closing Balance: MUR ${closingBalance.toLocaleString()}`, 'success');
     
-    // Clean the text first - normalize whitespace and line breaks
+    // Clean the text but preserve line structure
     const cleanedText = text
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n')
-      .replace(/\s+/g, ' ')
-      .replace(/\n\s+/g, '\n')
       .trim();
     
-    addLog(`Text cleaned and normalized for better parsing`, 'info');
+    addLog(`Text cleaned while preserving line structure`, 'info');
     
     // Split into lines for better processing
-    const lines = cleanedText.split('\n');
+    const lines = cleanedText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     
     // Look for transaction lines more carefully
     let transactionCount = 0;
@@ -232,175 +240,153 @@ const BankStatementProcessor = () => {
     addLog(`Processing ${lines.length} lines for transactions...`, 'info');
     
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+      const line = lines[i];
       
       // Skip empty lines or very short lines
       if (line.length < 15) continue;
       
-      // Enhanced pattern matching for MCB transactions
-      // Pattern 1: DD/MM/YYYY DD/MM/YYYY followed by description, debit, credit, balance
-      const mcbPattern1 = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/);
-      
-      // Pattern 2: DD/MM/YYYY DD/MM/YYYY followed by description and balance (for lines that span)
-      const mcbPattern2 = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d*)$/);
-      
-      let match = mcbPattern1 || mcbPattern2;
+      // Look for lines that start with date pattern: DD/MM/YYYY DD/MM/YYYY
+      const datePattern = /^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+)$/;
+      const match = line.match(datePattern);
       
       if (match) {
-        const [fullMatch, transDate, valueDate, description, ...amounts] = match;
+        const [, transDate, valueDate, remainder] = match;
         
-        // Clean up the description
-        let cleanDescription = description.trim().replace(/\s+/g, ' ');
+        // Parse the remainder to extract description and amounts
+        // Look for amounts at the end: description [amount] balance OR description amount balance
+        const amountPattern = /(.*?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
+        const amountMatch = remainder.match(amountPattern);
         
-        // Skip headers and invalid entries
-        if (cleanDescription.toLowerCase().includes('trans date') ||
-            cleanDescription.toLowerCase().includes('transaction details') ||
-            cleanDescription.toLowerCase().includes('statement page') ||
-            cleanDescription.toLowerCase().includes('account number') ||
-            cleanDescription.toLowerCase().includes('balance forward') ||
-            cleanDescription.toLowerCase().includes('opening balance') ||
-            cleanDescription.toLowerCase().includes('closing balance') ||
-            cleanDescription.length < 3) {
-          addLog(`Skipping header/invalid: "${cleanDescription.substring(0, 50)}..."`, 'info');
-          continue;
-        }
-        
-        // Handle different amount configurations
-        let transactionAmount = 0;
-        let balanceAmount = 0;
-        let isCredit = false;
-        
-        if (amounts.length >= 2) {
-          // Standard format: description debit credit balance OR description amount balance
-          const lastAmount = amounts[amounts.length - 1];
-          const secondLastAmount = amounts[amounts.length - 2];
+        if (amountMatch) {
+          const [, description, amount, balance] = amountMatch;
           
-          balanceAmount = parseFloat(lastAmount.replace(/,/g, ''));
-          transactionAmount = parseFloat(secondLastAmount.replace(/,/g, ''));
+          // Clean description
+          let cleanDescription = description.trim().replace(/\s+/g, ' ');
           
-          // Check if this might be a credit by looking at description or amount patterns
-          isCredit = cleanDescription.toLowerCase().includes('deposit') ||
-                    cleanDescription.toLowerCase().includes('transfer') && cleanDescription.toLowerCase().includes('mauritius revenue') ||
-                    cleanDescription.toLowerCase().includes('interbank transfer');
-        } else if (amounts.length === 1) {
-          // Only balance provided, need to look at next line or previous balance
-          balanceAmount = parseFloat(amounts[0].replace(/,/g, ''));
-          
-          // For single amount lines, we need to calculate the transaction amount
-          // by looking at the previous balance or checking the next few lines
-          if (i > 0) {
-            // Try to find previous balance to calculate transaction amount
-            const prevLine = lines[i-1];
-            const prevBalanceMatch = prevLine.match(/([\d,]+\.?\d*)\s*$/);
-            if (prevBalanceMatch) {
-              const prevBalance = parseFloat(prevBalanceMatch[1].replace(/,/g, ''));
-              transactionAmount = Math.abs(balanceAmount - prevBalance);
-            }
+          // Skip headers and invalid entries
+          if (cleanDescription.toLowerCase().includes('trans date') ||
+              cleanDescription.toLowerCase().includes('transaction details') ||
+              cleanDescription.toLowerCase().includes('statement page') ||
+              cleanDescription.toLowerCase().includes('account number') ||
+              cleanDescription.toLowerCase().includes('balance forward') ||
+              cleanDescription.toLowerCase().includes('opening balance') ||
+              cleanDescription.toLowerCase().includes('closing balance') ||
+              cleanDescription.length < 3) {
+            addLog(`Skipping header/invalid: "${cleanDescription.substring(0, 50)}..."`, 'info');
+            continue;
           }
           
-          if (transactionAmount === 0) {
-            // Fallback: look for amount in the description or nearby lines
-            const amountInDesc = cleanDescription.match(/([\d,]+\.?\d*)/);
-            if (amountInDesc) {
-              transactionAmount = parseFloat(amountInDesc[1].replace(/,/g, ''));
+          const transactionAmount = parseFloat(amount.replace(/,/g, ''));
+          const balanceAmount = parseFloat(balance.replace(/,/g, ''));
+          
+          // Skip if amounts are invalid
+          if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) {
+            addLog(`Skipping invalid amounts: amount=${transactionAmount}, balance=${balanceAmount}`, 'info');
+            continue;
+          }
+          
+          // Create unique key to avoid duplicates
+          const transactionKey = `${transDate}-${cleanDescription}-${transactionAmount}`;
+          
+          if (processedTransactions.has(transactionKey)) {
+            addLog(`Skipping duplicate: ${transDate} - ${cleanDescription.substring(0, 30)}...`, 'info');
+            continue;
+          }
+          
+          processedTransactions.add(transactionKey);
+          
+          // Determine if it's a credit or debit
+          const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
+                          cleanDescription.toLowerCase().includes('cash cheque') ||
+                          (cleanDescription.toLowerCase().includes('transfer') && 
+                           cleanDescription.toLowerCase().includes('mauritius revenue'));
+          
+          transactions.push({
+            transactionDate: transDate,
+            valueDate: valueDate,
+            description: cleanDescription,
+            amount: Math.abs(transactionAmount),
+            balance: Math.abs(balanceAmount),
+            sourceFile: fileName,
+            originalLine: line,
+            rawAmount: amount,
+            isDebit: !isCredit,
+            isCredit: isCredit
+          });
+          
+          transactionCount++;
+          addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${isCredit ? '(Credit)' : '(Debit)'}`, 'success');
+        } else {
+          // Try alternative parsing for lines with different format
+          // Maybe description amount balance in different order
+          const altPattern = /(.*?)\s+([\d,]+\.?\d*)$/;
+          const altMatch = remainder.match(altPattern);
+          
+          if (altMatch) {
+            const [, description, balance] = altMatch;
+            const cleanDescription = description.trim().replace(/\s+/g, ' ');
+            
+            // Skip headers
+            if (cleanDescription.toLowerCase().includes('trans date') ||
+                cleanDescription.toLowerCase().includes('transaction details') ||
+                cleanDescription.length < 3) {
+              continue;
+            }
+            
+            const balanceAmount = parseFloat(balance.replace(/,/g, ''));
+            
+            if (!isNaN(balanceAmount)) {
+              // For lines with only balance, try to calculate transaction amount from previous balance
+              let transactionAmount = 0;
+              
+              if (i > 0 && transactions.length > 0) {
+                const prevBalance = transactions[transactions.length - 1].balance;
+                transactionAmount = Math.abs(balanceAmount - prevBalance);
+              }
+              
+              if (transactionAmount > 0) {
+                const transactionKey = `${transDate}-${cleanDescription}-${transactionAmount}`;
+                
+                if (!processedTransactions.has(transactionKey)) {
+                  processedTransactions.add(transactionKey);
+                  
+                  const isCredit = cleanDescription.toLowerCase().includes('deposit') ||
+                                 (cleanDescription.toLowerCase().includes('transfer') && 
+                                  cleanDescription.toLowerCase().includes('mauritius revenue'));
+                  
+                  transactions.push({
+                    transactionDate: transDate,
+                    valueDate: valueDate,
+                    description: cleanDescription,
+                    amount: transactionAmount,
+                    balance: Math.abs(balanceAmount),
+                    sourceFile: fileName,
+                    originalLine: line,
+                    rawAmount: transactionAmount.toString(),
+                    isDebit: !isCredit,
+                    isCredit: isCredit
+                  });
+                  
+                  transactionCount++;
+                  addLog(`Alt Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${transactionAmount}`, 'success');
+                }
+              }
             }
           }
         }
-        
-        // Skip if we couldn't determine a valid transaction amount
-        if (isNaN(transactionAmount) || transactionAmount <= 0 || isNaN(balanceAmount)) {
-          addLog(`Skipping invalid amounts: amount=${transactionAmount}, balance=${balanceAmount}`, 'info');
-          continue;
-        }
-        
-        // Create unique key to avoid duplicates
-        const transactionKey = `${transDate}-${cleanDescription}-${transactionAmount}`;
-        
-        if (processedTransactions.has(transactionKey)) {
-          addLog(`Skipping duplicate: ${transDate} - ${cleanDescription.substring(0, 30)}...`, 'info');
-          continue;
-        }
-        
-        processedTransactions.add(transactionKey);
-        
-        transactions.push({
-          transactionDate: transDate,
-          valueDate: valueDate,
-          description: cleanDescription,
-          amount: Math.abs(transactionAmount),
-          balance: Math.abs(balanceAmount),
-          sourceFile: fileName,
-          originalLine: line,
-          rawAmount: amounts.join(','),
-          isDebit: !isCredit,
-          isCredit: isCredit
-        });
-        
-        transactionCount++;
-        addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${isCredit ? '(Credit)' : '(Debit)'}`, 'success');
       }
     }
     
-    // Additional pass: Look for transactions that might be on separate lines due to PDF formatting
-    addLog(`Looking for multi-line transactions...`, 'info');
-    
-    for (let i = 0; i < lines.length - 2; i++) {
-      const line1 = lines[i].trim();
-      const line2 = lines[i + 1].trim();
-      const line3 = lines[i + 2] ? lines[i + 2].trim() : '';
+    // If still no transactions, add debug output to see what lines we have
+    if (transactionCount === 0) {
+      addLog(`No transactions found. Showing first 10 lines for debugging:`, 'info');
+      for (let i = 0; i < Math.min(10, lines.length); i++) {
+        addLog(`Line ${i + 1}: "${lines[i]}"`, 'info');
+      }
       
-      // Check if we have a date pattern followed by description and amounts on next lines
-      const dateMatch = line1.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s*(.*)$/);
-      
-      if (dateMatch && line2.length > 0) {
-        const [, transDate, valueDate, partialDesc] = dateMatch;
-        
-        // Look for amount patterns in subsequent lines
-        const amountMatch = line2.match(/([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/) || 
-                           line3.match(/([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/);
-        
-        if (amountMatch) {
-          const description = (partialDesc + ' ' + line2.replace(amountMatch[0], '')).trim();
-          
-          // Skip if we already processed this transaction
-          const transactionKey = `${transDate}-${description}-${parseFloat(amountMatch[1].replace(/,/g, ''))}`;
-          if (processedTransactions.has(transactionKey)) {
-            continue;
-          }
-          
-          // Skip headers
-          if (description.toLowerCase().includes('trans date') || 
-              description.toLowerCase().includes('transaction details') ||
-              description.length < 3) {
-            continue;
-          }
-          
-          const transactionAmount = parseFloat(amountMatch[1].replace(/,/g, ''));
-          const balanceAmount = parseFloat(amountMatch[2].replace(/,/g, ''));
-          
-          if (!isNaN(transactionAmount) && transactionAmount > 0 && !isNaN(balanceAmount)) {
-            processedTransactions.add(transactionKey);
-            
-            const isCredit = description.toLowerCase().includes('deposit') ||
-                           (description.toLowerCase().includes('transfer') && description.toLowerCase().includes('mauritius revenue'));
-            
-            transactions.push({
-              transactionDate: transDate,
-              valueDate: valueDate,
-              description: description,
-              amount: Math.abs(transactionAmount),
-              balance: Math.abs(balanceAmount),
-              sourceFile: fileName,
-              originalLine: line1 + ' ' + line2,
-              rawAmount: amountMatch[1],
-              isDebit: !isCredit,
-              isCredit: isCredit
-            });
-            
-            transactionCount++;
-            addLog(`Multi-line Transaction ${transactionCount}: ${transDate} - ${description.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)}`, 'success');
-          }
-        }
+      addLog(`Showing last 10 lines for debugging:`, 'info');
+      for (let i = Math.max(0, lines.length - 10); i < lines.length; i++) {
+        addLog(`Line ${i + 1}: "${lines[i]}"`, 'info');
       }
     }
     
