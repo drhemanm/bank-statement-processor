@@ -97,58 +97,93 @@ const BankStatementProcessor = () => {
       if (meaningfulLines < 20) {
         addLog('Low text content detected - switching to OCR mode...', 'info');
 
-        // Load Tesseract.js dynamically
-        if (!window.Tesseract) {
-          const script = document.createElement('script');
-          script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js';
-          document.head.appendChild(script);
+        try {
+          // Load Tesseract.js dynamically with better error handling
+          if (!window.Tesseract) {
+            addLog('Loading Tesseract OCR library...', 'info');
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js';
+            document.head.appendChild(script);
+            
+            await new Promise((resolve, reject) => {
+              script.onload = () => {
+                addLog('Tesseract OCR loaded successfully', 'success');
+                resolve();
+              };
+              script.onerror = () => reject(new Error('Failed to load Tesseract'));
+              
+              // Timeout after 30 seconds
+              setTimeout(() => reject(new Error('Tesseract loading timeout')), 30000);
+            });
+          }
           
-          await new Promise((resolve) => {
-            script.onload = () => resolve();
-          });
-        }
-        
-        const { createWorker } = window.Tesseract;
-        const worker = await createWorker('eng');
+          if (!window.Tesseract || !window.Tesseract.createWorker) {
+            throw new Error('Tesseract not available');
+          }
+          
+          const { createWorker } = window.Tesseract;
+          addLog('Initializing OCR worker...', 'info');
+          const worker = await createWorker('eng');
 
-        let ocrText = '';
+          let ocrText = '';
 
-        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-          addLog(`Converting page ${pageNum} to image for OCR...`, 'info');
-          
-          const page = await pdf.getPage(pageNum);
-          const viewport = page.getViewport({ scale: 2.0 });
-          
-          const canvas = document.createElement('canvas');
-          const context = canvas.getContext('2d');
-          canvas.height = viewport.height;
-          canvas.width = viewport.width;
-          
-          await page.render({ canvasContext: context, viewport }).promise;
-          
-          addLog(`Running OCR on page ${pageNum}...`, 'info');
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            addLog(`Converting page ${pageNum} to image for OCR...`, 'info');
+            
+            try {
+              const page = await pdf.getPage(pageNum);
+              const viewport = page.getViewport({ scale: 2.0 });
+              
+              const canvas = document.createElement('canvas');
+              const context = canvas.getContext('2d');
+              canvas.height = viewport.height;
+              canvas.width = viewport.width;
+              
+              await page.render({ canvasContext: context, viewport }).promise;
+              
+              addLog(`Running OCR on page ${pageNum}...`, 'info');
 
-          // Enhanced OCR settings for financial documents
-          await worker.setParameters({
-            'tessedit_char_whitelist': '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/-:()\' ',
-            'preserve_interword_spaces': '1',
-            'tessedit_pageseg_mode': '6',
-          });
+              // Enhanced OCR settings for financial documents
+              await worker.setParameters({
+                'tessedit_char_whitelist': '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/-:()\' ',
+                'preserve_interword_spaces': '1',
+                'tessedit_pageseg_mode': '6',
+              });
 
-          const ocrResult = await worker.recognize(canvas, {
-            logger: m => {
-              if (m.status === 'recognizing text') {
-                addLog(`OCR Progress: ${Math.round(m.progress * 100)}%`, 'info');
+              const ocrResult = await worker.recognize(canvas, {
+                logger: m => {
+                  if (m.status === 'recognizing text') {
+                    addLog(`OCR Progress: ${Math.round(m.progress * 100)}%`, 'info');
+                  }
+                }
+              });
+              
+              if (ocrResult && ocrResult.data && ocrResult.data.text) {
+                ocrText += ocrResult.data.text + '\n';
+                addLog(`OCR completed for page ${pageNum} - ${ocrResult.data.text.length} chars extracted`, 'success');
+              } else {
+                addLog(`OCR returned no text for page ${pageNum}`, 'error');
               }
+              
+            } catch (pageError) {
+              addLog(`OCR failed for page ${pageNum}: ${pageError.message}`, 'error');
+              continue;
             }
-          });
-          
-          ocrText += ocrResult.data.text + '\n';
-          addLog(`OCR completed for page ${pageNum} - ${ocrResult.data.text.length} chars extracted`, 'success');
-        }
+          }
 
-        await worker.terminate();
-        fullText = ocrText;
+          await worker.terminate();
+          
+          if (ocrText.trim().length > 0) {
+            fullText = ocrText;
+            addLog(`OCR processing complete - ${ocrText.length} total characters extracted`, 'success');
+          } else {
+            addLog('OCR extracted no readable text', 'error');
+          }
+          
+        } catch (ocrError) {
+          addLog(`OCR processing failed: ${ocrError.message}`, 'error');
+          addLog('Continuing with direct PDF text extraction...', 'info');
+        }
       }
 
       // Enhance with Claude API if available
