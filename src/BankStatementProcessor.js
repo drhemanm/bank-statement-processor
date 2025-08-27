@@ -8,7 +8,9 @@ const BankStatementProcessor = () => {
   const [logs, setLogs] = useState([]);
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
-  const [combinePDFs, setCombinePDFs] = useState(false); // Toggle for combining PDFs
+  const [combinePDFs, setCombinePDFs] = useState(false);
+  const [fileProgress, setFileProgress] = useState({}); // Track progress per file
+  const [processingStats, setProcessingStats] = useState({ completed: 0, total: 0, failed: 0 });
   const fileInputRef = useRef(null);
 
   // Enhanced mapping rules with more MCB-specific patterns
@@ -105,7 +107,41 @@ const BankStatementProcessor = () => {
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
+    setFileProgress({});
+    setProcessingStats({ completed: 0, total: 0, failed: 0 });
+    
+    // Initialize progress tracking for each file
+    const initialProgress = {};
+    uploadedFiles.forEach(file => {
+      initialProgress[file.name] = {
+        status: 'pending',
+        progress: 0,
+        transactions: 0,
+        error: null
+      };
+    });
+    setFileProgress(initialProgress);
+    
     addLog(`${uploadedFiles.length} file(s) uploaded successfully`, 'success');
+  };
+
+  const removeFile = (indexToRemove) => {
+    const updatedFiles = files.filter((_, index) => index !== indexToRemove);
+    setFiles(updatedFiles);
+    
+    // Update progress tracking
+    const updatedProgress = { ...fileProgress };
+    delete updatedProgress[files[indexToRemove].name];
+    setFileProgress(updatedProgress);
+    
+    addLog(`Removed ${files[indexToRemove].name}`, 'info');
+  };
+
+  const updateFileProgress = (fileName, updates) => {
+    setFileProgress(prev => ({
+      ...prev,
+      [fileName]: { ...prev[fileName], ...updates }
+    }));
   };
 
   // Enhanced PDF text extraction (keeping original logic intact)
@@ -173,7 +209,67 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Enhanced transaction extraction with improved patterns
+  // Process single file with progress tracking
+  const processSingleFile = async (file) => {
+    const fileName = file.name;
+    
+    try {
+      updateFileProgress(fileName, { status: 'processing', progress: 10 });
+      addLog(`Starting ${fileName}...`, 'info');
+
+      let extractedText = '';
+      
+      if (file.type === 'application/pdf') {
+        updateFileProgress(fileName, { status: 'extracting', progress: 30 });
+        extractedText = await extractTextFromPDF(file);
+      } else {
+        updateFileProgress(fileName, { status: 'reading', progress: 30 });
+        extractedText = await file.text();
+        addLog(`Text file processed: ${fileName}`, 'success');
+      }
+
+      if (extractedText) {
+        updateFileProgress(fileName, { status: 'analyzing', progress: 60 });
+        const transactions = extractTransactionsFromText(extractedText, fileName);
+        
+        updateFileProgress(fileName, { 
+          status: 'completed', 
+          progress: 100,
+          transactions: transactions.length
+        });
+        
+        addLog(`✅ ${fileName}: ${transactions.length} transactions extracted`, 'success');
+        
+        return {
+          fileName,
+          transactions,
+          balanceInfo: {
+            openingBalance: transactions.openingBalance || 0,
+            closingBalance: transactions.closingBalance || 0
+          },
+          success: true
+        };
+      } else {
+        throw new Error('No text extracted from file');
+      }
+    } catch (error) {
+      updateFileProgress(fileName, { 
+        status: 'failed', 
+        progress: 0,
+        error: error.message
+      });
+      
+      addLog(`❌ ${fileName}: ${error.message}`, 'error');
+      
+      return {
+        fileName,
+        transactions: [],
+        balanceInfo: { openingBalance: 0, closingBalance: 0 },
+        success: false,
+        error: error.message
+      };
+    }
+  };
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
     
@@ -420,7 +516,7 @@ const BankStatementProcessor = () => {
     return { category: 'UNCATEGORIZED', matched: false, keyword: null, confidence: 'none' };
   };
 
-  // Keep original process files logic intact
+  // Enhanced parallel processing
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('Please upload files first', 'error');
@@ -431,58 +527,69 @@ const BankStatementProcessor = () => {
     setResults(null);
     setUncategorizedData([]);
     setFileStats({});
-    addLog('Starting enhanced processing with improved extraction patterns...', 'info');
+    setProcessingStats({ completed: 0, total: files.length, failed: 0 });
+    
+    addLog(`Starting parallel processing of ${files.length} files...`, 'info');
 
     try {
+      // Process files in parallel with concurrency limit
+      const concurrencyLimit = 3; // Process max 3 files simultaneously
+      const results = [];
+      
+      for (let i = 0; i < files.length; i += concurrencyLimit) {
+        const batch = files.slice(i, i + concurrencyLimit);
+        const batchPromises = batch.map(file => processSingleFile(file));
+        
+        addLog(`Processing batch ${Math.floor(i/concurrencyLimit) + 1}/${Math.ceil(files.length/concurrencyLimit)}...`, 'info');
+        
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults);
+        
+        // Update overall progress
+        setProcessingStats(prev => ({
+          ...prev,
+          completed: results.length,
+          failed: results.filter(r => !r.success).length
+        }));
+      }
+
+      // Combine all results
       const allTransactions = [];
       const stats = {};
       const balanceInfo = {};
+      let totalFailed = 0;
 
-      for (const file of files) {
-        addLog(`Processing ${file.name}...`, 'info');
-        
-        let extractedText = '';
-        
-        if (file.type === 'application/pdf') {
-          try {
-            extractedText = await extractTextFromPDF(file);
-          } catch (error) {
-            addLog(`Could not process PDF ${file.name}: ${error.message}`, 'error');
-            continue;
-          }
-        } else {
-          try {
-            extractedText = await file.text();
-            addLog(`Text file processed: ${file.name}`, 'success');
-          } catch (error) {
-            addLog(`Could not read ${file.name}: ${error.message}`, 'error');
-            continue;
-          }
-        }
-
-        if (extractedText) {
-          const transactions = extractTransactionsFromText(extractedText, file.name);
-          allTransactions.push(...transactions);
+      results.forEach(result => {
+        if (result.success) {
+          allTransactions.push(...result.transactions);
           
-          balanceInfo[file.name] = {
-            openingBalance: transactions.openingBalance || 0,
-            closingBalance: transactions.closingBalance || 0
-          };
+          balanceInfo[result.fileName] = result.balanceInfo;
           
-          stats[file.name] = {
-            total: transactions.length,
+          stats[result.fileName] = {
+            total: result.transactions.length,
             categorized: 0,
             uncategorized: 0,
-            openingBalance: transactions.openingBalance || 0,
-            closingBalance: transactions.closingBalance || 0
+            openingBalance: result.balanceInfo.openingBalance,
+            closingBalance: result.balanceInfo.closingBalance,
+            status: 'success'
           };
-          
-          addLog(`Final: ${transactions.length} transactions from ${file.name}`, 'success');
+        } else {
+          totalFailed++;
+          stats[result.fileName] = {
+            total: 0,
+            categorized: 0,
+            uncategorized: 0,
+            openingBalance: 0,
+            closingBalance: 0,
+            status: 'failed',
+            error: result.error
+          };
         }
-      }
+      });
 
       setFileStats({...stats, balanceInfo});
 
+      // Process categorization
       const categorizedData = {
         'SALES': [],
         'Salary': [],
@@ -497,7 +604,6 @@ const BankStatementProcessor = () => {
 
       const uncategorized = [];
 
-      // Enhanced categorization logging
       allTransactions.forEach(transaction => {
         const { category, matched, keyword, confidence } = categorizeTransaction(transaction.description);
         
@@ -511,8 +617,6 @@ const BankStatementProcessor = () => {
           if (stats[transaction.sourceFile]) {
             stats[transaction.sourceFile].categorized++;
           }
-          
-          addLog(`${transaction.description.substring(0, 30)}... → ${category} (${confidence})`, 'success');
         } else {
           uncategorized.push({
             ...transaction,
@@ -522,8 +626,6 @@ const BankStatementProcessor = () => {
           if (stats[transaction.sourceFile]) {
             stats[transaction.sourceFile].uncategorized++;
           }
-          
-          addLog(`Uncategorized: ${transaction.description.substring(0, 30)}...`, 'error');
         }
       });
 
@@ -537,14 +639,15 @@ const BankStatementProcessor = () => {
       const overallOpeningBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.openingBalance, 0);
       const overallClosingBalance = Object.values(balanceInfo).reduce((sum, info) => sum + info.closingBalance, 0);
       
-      addLog(`Processing complete!`, 'success');
+      addLog(`Parallel processing complete!`, 'success');
+      addLog(`Files: ${files.length - totalFailed}/${files.length} successful`, totalFailed > 0 ? 'error' : 'success');
       addLog(`Total: ${totalProcessed}, Categorized: ${totalCategorized}, Uncategorized: ${uncategorized.length}`, 'success');
       addLog(`Success Rate: ${successRate}%`, 'success');
       addLog(`Overall Opening Balance: MUR ${overallOpeningBalance.toLocaleString()}`, 'success');
       addLog(`Overall Closing Balance: MUR ${overallClosingBalance.toLocaleString()}`, 'success');
 
     } catch (error) {
-      addLog(`Error: ${error.message}`, 'error');
+      addLog(`Processing error: ${error.message}`, 'error');
       console.error('Processing error:', error);
     } finally {
       setProcessing(false);
@@ -884,17 +987,104 @@ const BankStatementProcessor = () => {
                   <p className="text-blue-800 font-medium mb-3">
                     {files.length} files selected
                   </p>
-                  <div className="max-h-32 overflow-y-auto">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      {files.map((file, index) => (
-                        <div key={index} className="flex items-center bg-white rounded p-2 text-sm">
-                          <FileText className="h-4 w-4 text-gray-400 mr-2" />
-                          <span className="truncate text-gray-700">{file.name}</span>
-                          <span className="ml-2 text-gray-400 text-xs">
-                            {(file.size / 1024).toFixed(1)}KB
-                          </span>
-                        </div>
-                      ))}
+                  
+                  {/* Overall Progress Bar */}
+                  {processing && (
+                    <div className="mb-4 p-3 bg-white rounded border">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-sm font-medium text-gray-700">Overall Progress</span>
+                        <span className="text-sm text-gray-600">
+                          {processingStats.completed}/{processingStats.total} files
+                          {processingStats.failed > 0 && <span className="text-red-600"> ({processingStats.failed} failed)</span>}
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          style={{
+                            width: `${(processingStats.completed / processingStats.total) * 100}%`
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="max-h-64 overflow-y-auto">
+                    <div className="grid grid-cols-1 gap-3">
+                      {files.map((file, index) => {
+                        const progress = fileProgress[file.name] || { status: 'pending', progress: 0, transactions: 0 };
+                        return (
+                          <div key={index} className="flex items-center bg-white rounded p-3 border">
+                            {/* File Icon and Info */}
+                            <div className="flex items-center flex-1 min-w-0">
+                              <FileText className="h-4 w-4 text-gray-400 mr-2 flex-shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between">
+                                  <span className="truncate text-gray-700 text-sm font-medium">{file.name}</span>
+                                  <span className="ml-2 text-gray-400 text-xs flex-shrink-0">
+                                    {(file.size / 1024).toFixed(1)}KB
+                                  </span>
+                                </div>
+                                
+                                {/* Progress Bar for Individual File */}
+                                {processing && progress.status !== 'pending' && (
+                                  <div className="mt-2">
+                                    <div className="flex justify-between items-center mb-1">
+                                      <span className="text-xs text-gray-600 capitalize">
+                                        {progress.status === 'completed' && progress.transactions > 0 ? 
+                                          `${progress.transactions} transactions` : 
+                                          progress.status
+                                        }
+                                      </span>
+                                      <span className="text-xs text-gray-500">
+                                        {progress.progress}%
+                                      </span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                      <div 
+                                        className={`h-1.5 rounded-full transition-all duration-300 ${
+                                          progress.status === 'completed' ? 'bg-green-500' :
+                                          progress.status === 'failed' ? 'bg-red-500' :
+                                          'bg-blue-500'
+                                        }`}
+                                        style={{
+                                          width: `${progress.progress}%`
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Error Message */}
+                                {progress.status === 'failed' && progress.error && (
+                                  <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+                                    {progress.error}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            
+                            {/* Remove Button */}
+                            {!processing && (
+                              <button
+                                onClick={() => removeFile(index)}
+                                className="ml-2 text-red-400 hover:text-red-600 p-1"
+                                title="Remove file"
+                              >
+                                ✕
+                              </button>
+                            )}
+                            
+                            {/* Status Indicator */}
+                            <div className="ml-2 flex-shrink-0">
+                              {progress.status === 'completed' && <CheckCircle className="h-4 w-4 text-green-500" />}
+                              {progress.status === 'failed' && <AlertCircle className="h-4 w-4 text-red-500" />}
+                              {progress.status === 'processing' && <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />}
+                              {progress.status === 'pending' && <div className="h-4 w-4 bg-gray-300 rounded-full" />}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
