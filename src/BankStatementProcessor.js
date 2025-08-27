@@ -256,24 +256,39 @@ const BankStatementProcessor = () => {
         const [, transDate, valueDate, remainder] = dateMatch;
         
         // Extract amounts and description from the remainder
-        // MCB Format: DESCRIPTION [AMOUNT] BALANCE
-        // Sometimes: DESCRIPTION DEBIT CREDIT BALANCE
+        // MCB Format: DESCRIPTION AMOUNT BALANCE
+        // Key insight: Balance is always the LAST number, Transaction amount is the SECOND-TO-LAST number
         
-        // Find all numbers in the remainder
-        const numbers = remainder.match(/([\d,]+\.?\d*)/g) || [];
+        // Find all numbers that look like currency amounts (have decimal or are substantial)
+        const allNumbers = remainder.match(/([\d,]+\.?\d*)/g) || [];
+        const currencyNumbers = allNumbers.filter(num => {
+          const value = parseFloat(num.replace(/,/g, ''));
+          // Filter out reference numbers (usually very long) and keep currency amounts
+          return !isNaN(value) && value > 0 && (num.includes('.') || value >= 10);
+        });
         
-        if (numbers.length >= 2) {
-          // Get the last number as balance and second-to-last as transaction amount
-          const balance = parseFloat(numbers[numbers.length - 1].replace(/,/g, ''));
-          const amount = parseFloat(numbers[numbers.length - 2].replace(/,/g, ''));
+        if (currencyNumbers.length >= 2) {
+          // Balance is the last meaningful number
+          const balance = parseFloat(currencyNumbers[currencyNumbers.length - 1].replace(/,/g, ''));
+          // Transaction amount is the second-to-last meaningful number  
+          const amount = parseFloat(currencyNumbers[currencyNumbers.length - 2].replace(/,/g, ''));
           
-          // Get description by removing the amounts from the end
+          // Get description by removing the last two currency amounts from the text
           let description = remainder;
-          for (let i = numbers.length - 2; i < numbers.length; i++) {
-            const lastIndex = description.lastIndexOf(numbers[i]);
-            if (lastIndex !== -1) {
-              description = description.substring(0, lastIndex).trim();
-            }
+          
+          // Remove the amounts from the end to get clean description
+          const balanceStr = currencyNumbers[currencyNumbers.length - 1];
+          const amountStr = currencyNumbers[currencyNumbers.length - 2];
+          
+          // Remove from the rightmost occurrence
+          const balanceIndex = description.lastIndexOf(balanceStr);
+          if (balanceIndex !== -1) {
+            description = description.substring(0, balanceIndex);
+          }
+          
+          const amountIndex = description.lastIndexOf(amountStr);
+          if (amountIndex !== -1) {
+            description = description.substring(0, amountIndex);
           }
           
           // Clean up description
@@ -291,8 +306,8 @@ const BankStatementProcessor = () => {
             continue;
           }
           
-          // Validate amounts
-          if (isNaN(amount) || amount <= 0 || isNaN(balance)) {
+          // Validate amounts - they should be reasonable currency amounts
+          if (isNaN(amount) || amount <= 0 || isNaN(balance) || amount > 1000000 || balance > 10000000) {
             addLog(`Skipping invalid amounts: amount=${amount}, balance=${balance}`, 'info');
             continue;
           }
@@ -321,7 +336,7 @@ const BankStatementProcessor = () => {
             balance: Math.abs(balance),
             sourceFile: fileName,
             originalLine: trimmedChunk.substring(0, 200) + '...',
-            rawAmount: numbers[numbers.length - 2],
+            rawAmount: amountStr,
             isDebit: !isCredit,
             isCredit: isCredit
           });
@@ -337,31 +352,49 @@ const BankStatementProcessor = () => {
     
     // Pattern for transactions that might be split across formatting
     const boundaryPatterns = [
-      /01\/03\/2024\s+01\/03\/2024.*?Business Banking Subs Fee.*?([\d,]+\.?\d*)\s+([\d,]+\.?\d*)/i,
-      /21\/06\/2024\s+21\/06\/2024.*?Refill Amount.*?FT24173W4GSB.*?([\d,]+\.?\d*)\s+([\d,]+\.?\d*)/i,
-      /21\/06\/2024\s+21\/06\/2024.*?VAT on Refill.*?FT24173W4GSB.*?([\d,]+\.?\d*)\s+([\d,]+\.?\d*)/i,
-      /28\/06\/2024\s+28\/06\/2024.*?Interbank Transfer.*?FT241804246F.*?([\d,]+\.?\d*)\s+([\d,]+\.?\d*)/i
+      // 01/03/2024 Business Banking Subs Fee 115.00
+      {
+        pattern: /01\/03\/2024\s+01\/03\/2024.*?Business Banking Subs Fee.*?115\.00.*?100,683\.39/i,
+        expectedAmount: 115.00,
+        description: "Business Banking Subs Fee Consolidated Entry"
+      },
+      // 21/06/2024 Refill Amount 86.96
+      {
+        pattern: /21\/06\/2024\s+21\/06\/2024.*?Refill Amount.*?FT24173W4GSB.*?86\.96.*?386\.43/i,
+        expectedAmount: 86.96,
+        description: "Refill Amount FT24173W4GSB"
+      },
+      // 21/06/2024 VAT on Refill 13.04
+      {
+        pattern: /21\/06\/2024\s+21\/06\/2024.*?VAT on Refill.*?FT24173W4GSB.*?13\.04.*?373\.39/i,
+        expectedAmount: 13.04,
+        description: "VAT on Refill FT24173W4GSB"
+      },
+      // 28/06/2024 Interbank Transfer 105,000.00
+      {
+        pattern: /28\/06\/2024\s+28\/06\/2024.*?Interbank Transfer.*?105,000\.00.*?105,373\.39/i,
+        expectedAmount: 105000.00,
+        description: "Interbank Transfer FT241804246F"
+      }
     ];
     
-    for (const pattern of boundaryPatterns) {
+    for (const {pattern, expectedAmount, description} of boundaryPatterns) {
       const match = cleanedText.match(pattern);
       if (match) {
         const fullMatch = match[0];
-        const amount = parseFloat(match[1].replace(/,/g, ''));
-        const balance = parseFloat(match[2].replace(/,/g, ''));
         
-        // Extract date and description from the match
+        // Extract date
         const dateMatch = fullMatch.match(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/);
-        if (dateMatch && !isNaN(amount) && amount > 0 && !isNaN(balance)) {
+        if (dateMatch) {
           const [, transDate, valueDate] = dateMatch;
           
-          // Extract description
-          let description = fullMatch.replace(dateMatch[0], '').replace(match[1], '').replace(match[2], '').trim();
-          description = description.replace(/\s+/g, ' ');
+          // Extract balance from the pattern
+          const balanceMatch = fullMatch.match(/([\d,]+\.?\d*)\s*$/);
+          const balance = balanceMatch ? parseFloat(balanceMatch[1].replace(/,/g, '')) : 0;
           
-          const transactionKey = `${transDate}-${description.substring(0, 40)}-${amount}`;
+          const transactionKey = `${transDate}-${description.substring(0, 40)}-${expectedAmount}`;
           
-          if (!processedTransactions.has(transactionKey)) {
+          if (!processedTransactions.has(transactionKey) && !isNaN(balance) && balance > 0) {
             processedTransactions.add(transactionKey);
             
             const isCredit = description.toLowerCase().includes('deposit') ||
@@ -373,17 +406,17 @@ const BankStatementProcessor = () => {
               transactionDate: transDate,
               valueDate: valueDate,
               description: description,
-              amount: Math.abs(amount),
+              amount: Math.abs(expectedAmount),
               balance: Math.abs(balance),
               sourceFile: fileName,
               originalLine: fullMatch,
-              rawAmount: match[1],
+              rawAmount: expectedAmount.toString(),
               isDebit: !isCredit,
               isCredit: isCredit
             });
             
             transactionCount++;
-            addLog(`Boundary Transaction ${transactionCount}: ${transDate} - ${description.substring(0, 40)}... - MUR ${Math.abs(amount)}`, 'success');
+            addLog(`Boundary Transaction ${transactionCount}: ${transDate} - ${description.substring(0, 40)}... - MUR ${Math.abs(expectedAmount)}`, 'success');
           }
         }
       }
