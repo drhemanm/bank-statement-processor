@@ -616,33 +616,53 @@ const BankStatementProcessor = () => {
     let totalAmount = 0;
     let categories = 0;
     
+    // Debug: Show what we're actually calculating
+    console.log("=== CALCULATION DEBUG ===");
+    
     Object.entries(results).forEach(([category, transactions]) => {
       if (transactions.length > 0) {
         totalTransactions += transactions.length;
-        // Fix the calculation - ensure amounts are properly parsed as numbers
+        
+        // Debug each transaction amount
+        console.log(`Category: ${category}`);
+        transactions.forEach((t, index) => {
+          const amount = parseFloat(t.amount) || 0;
+          console.log(`  Transaction ${index + 1}: ${t.description.substring(0, 30)}... = MUR ${amount}`);
+          
+          // Check if we're accidentally using balance instead of amount
+          if (t.balance) {
+            console.log(`    (Balance was: MUR ${t.balance} - NOT USED IN CALCULATION)`);
+          }
+        });
+        
+        // Calculate category total
         const categoryTotal = transactions.reduce((sum, t) => {
           const amount = parseFloat(t.amount) || 0;
           return sum + amount;
         }, 0);
+        
+        console.log(`  Category ${category} total: MUR ${categoryTotal.toFixed(2)}`);
         totalAmount += categoryTotal;
         categories++;
-        
-        // Debug log for troubleshooting
-        console.log(`Category ${category}: ${transactions.length} transactions, total: ${categoryTotal.toFixed(2)}`);
       }
     });
     
-    // Add uncategorized transactions to total
+    // Add uncategorized transactions
     if (uncategorizedData && uncategorizedData.length > 0) {
+      console.log(`Uncategorized transactions:`);
       const uncategorizedTotal = uncategorizedData.reduce((sum, t) => {
         const amount = parseFloat(t.amount) || 0;
+        console.log(`  ${t.description.substring(0, 30)}... = MUR ${amount}`);
         return sum + amount;
       }, 0);
+      console.log(`  Uncategorized total: MUR ${uncategorizedTotal.toFixed(2)}`);
       totalAmount += uncategorizedTotal;
-      console.log(`Uncategorized: ${uncategorizedData.length} transactions, total: ${uncategorizedTotal.toFixed(2)}`);
     }
     
-    console.log(`Final totals: ${totalTransactions} transactions, MUR ${totalAmount.toFixed(2)}`);
+    console.log(`=== FINAL CALCULATION ===`);
+    console.log(`Total transactions: ${totalTransactions}`);
+    console.log(`Total amount: MUR ${totalAmount.toFixed(2)}`);
+    console.log(`========================`);
     
     return { totalTransactions, totalAmount, categories };
   };
