@@ -1017,7 +1017,7 @@ const BankStatementProcessor = () => {
     
     return (
       <div 
-        className="relative w-full h-32 cursor-pointer group"
+        className="relative w-full h-40 cursor-pointer group"
         style={{ perspective: '1000px' }}
         onClick={() => toggleCardFlip(cardId)}
       >
