@@ -155,17 +155,20 @@ const BankStatementProcessor = () => {
       line.trim().length > 5 && /[a-zA-Z]/.test(line) && /\d/.test(line)
     ).length;
 
-    // Banking keywords to look for
+    addLog(`Analyzing document content: ${textLength} characters, ${meaningfulLines} meaningful lines`, 'info');
+
+    // Banking keywords to look for (more comprehensive)
     const bankingKeywords = [
       'statement', 'account', 'balance', 'transaction', 'credit', 'debit',
       'deposit', 'withdrawal', 'transfer', 'payment', 'bank', 'mcb',
       'mauritius commercial bank', 'account number', 'statement period',
-      'opening balance', 'closing balance', 'current balance'
+      'opening balance', 'closing balance', 'current balance', 'brought forward',
+      'carried forward', 'trans date', 'value date'
     ];
 
     const currencyPatterns = ['MUR', 'Rs', 'rupees', 'mauritius rupees'];
     const datePatterns = /\d{2}\/\d{2}\/\d{4}/g;
-    const amountPatterns = /[\d,]+\.?\d*\s*(?:MUR|Rs)/gi;
+    const amountPatterns = /[\d,]+\.?\d*\s*(?:MUR|Rs|rupees)/gi;
 
     // Count matches
     const bankingKeywordMatches = bankingKeywords.filter(keyword => 
@@ -179,79 +182,106 @@ const BankStatementProcessor = () => {
     const dateMatches = (text.match(datePatterns) || []).length;
     const amountMatches = (text.match(amountPatterns) || []).length;
 
-    // Text density analysis
+    // Text density analysis (more strict for scanned detection)
     const textDensity = textLength / totalPages;
     const avgMeaningfulLinesPerPage = meaningfulLines / totalPages;
+    
+    // Character variety analysis (scanned PDFs often have limited character sets)
+    const uniqueChars = new Set(text.toLowerCase().replace(/\s/g, '')).size;
+    const charVariety = uniqueChars / Math.min(textLength, 100); // Normalize
 
-    addLog(`Content analysis - Text: ${textLength} chars, Lines: ${meaningfulLines}, Banking terms: ${bankingKeywordMatches}`, 'info');
+    addLog(`Analysis results - Banking terms: ${bankingKeywordMatches}, Currency: ${currencyMatches}, Dates: ${dateMatches}, Amounts: ${amountMatches}`, 'info');
+    addLog(`Text density: ${textDensity.toFixed(1)} chars/page, Line density: ${avgMeaningfulLinesPerPage.toFixed(1)} lines/page`, 'info');
 
-    // Classification logic
-    if (textDensity < 100) {
+    // 1. SCANNED DOCUMENT DETECTION (more sensitive)
+    if (textDensity < 200 || avgMeaningfulLinesPerPage < 15 || charVariety < 0.3) {
       return {
         isValid: false,
         type: 'scanned',
-        confidence: textDensity < 50 ? 'high' : 'medium',
-        message: 'Scanned document detected - contains mostly images',
-        suggestion: 'This appears to be a scanned PDF. For best results, please request a digital/text-based statement from your bank, or consider upgrading to our premium OCR service.',
+        confidence: textDensity < 100 ? 'high' : 'medium',
+        message: '🖼️ Scanned document detected - contains mostly images',
+        suggestion: 'This appears to be a scanned PDF with images instead of searchable text. For best results, please request a digital/text-based statement from your bank, or consider our premium OCR service for image processing.',
         details: {
-          textDensity,
+          textDensity: Math.round(textDensity),
           meaningfulLines,
-          avgLinesPerPage: avgMeaningfulLinesPerPage
+          avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10,
+          charVariety: Math.round(charVariety * 100) / 100
         }
       };
     }
 
-    if (bankingKeywordMatches < 3 && currencyMatches === 0 && dateMatches < 5) {
+    // 2. WRONG DOCUMENT TYPE DETECTION (more comprehensive)
+    if (bankingKeywordMatches < 2 && currencyMatches === 0 && dateMatches < 3) {
+      const detectedContent = [];
+      
+      // Check what type of document this might be
+      if (text.toLowerCase().includes('invoice') || text.toLowerCase().includes('receipt')) {
+        detectedContent.push('invoice/receipt');
+      }
+      if (text.toLowerCase().includes('contract') || text.toLowerCase().includes('agreement')) {
+        detectedContent.push('contract/agreement');
+      }
+      if (text.toLowerCase().includes('report') && !text.toLowerCase().includes('account')) {
+        detectedContent.push('report');
+      }
+      
+      const detectedType = detectedContent.length > 0 ? ` (appears to be ${detectedContent.join(' or ')})` : '';
+      
       return {
         isValid: false,
         type: 'wrong_document',
         confidence: 'high',
-        message: 'This does not appear to be a bank statement',
-        suggestion: 'Please upload a bank statement document. Expected content includes account details, transactions, balances, and dates.',
+        message: `❌ This does not appear to be a bank statement${detectedType}`,
+        suggestion: 'Please upload a bank statement document. Expected content includes account details, transaction dates, amounts with currency, and balance information.',
         details: {
           bankingKeywords: bankingKeywordMatches,
           currencyMatches,
-          dateMatches
+          dateMatches,
+          detectedContent
         }
       };
     }
 
-    if (avgMeaningfulLinesPerPage < 10) {
+    // 3. LOW QUALITY DETECTION
+    if (avgMeaningfulLinesPerPage < 8 || textDensity < 150) {
       return {
         isValid: false,
         type: 'low_quality',
         confidence: 'medium',
-        message: 'Low quality document or insufficient content',
-        suggestion: 'This document may be corrupted, have low text quality, or contain insufficient transaction data. Please verify the document quality.',
+        message: '⚠️ Low quality document or insufficient content detected',
+        suggestion: 'This document may be corrupted, have low text quality, or contain insufficient transaction data. Please verify the document quality or try a different format.',
         details: {
-          avgLinesPerPage: avgMeaningfulLinesPerPage,
-          textDensity
+          avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10,
+          textDensity: Math.round(textDensity)
         }
       };
     }
 
-    // Validation successful
+    // 4. VALIDATION SUCCESSFUL
     const confidenceScore = Math.min(100, 
-      (bankingKeywordMatches * 10) + 
-      (currencyMatches * 15) + 
+      (bankingKeywordMatches * 8) + 
+      (currencyMatches * 12) + 
       (dateMatches * 2) + 
-      (amountMatches * 3)
+      (amountMatches * 3) +
+      (textDensity > 500 ? 20 : 10)
     );
+
+    const confidenceLevel = confidenceScore > 70 ? 'high' : confidenceScore > 50 ? 'medium' : 'low';
 
     return {
       isValid: true,
       type: 'valid_statement',
-      confidence: confidenceScore > 80 ? 'high' : confidenceScore > 60 ? 'medium' : 'low',
-      message: 'Valid bank statement detected',
-      suggestion: 'Document appears to be a proper bank statement with transaction data.',
+      confidence: confidenceLevel,
+      message: '✅ Valid bank statement detected - Ready for processing!',
+      suggestion: 'Document appears to be a proper bank statement with searchable transaction data. Processing should work optimally.',
       details: {
-        confidenceScore,
+        confidenceScore: Math.round(confidenceScore),
         bankingKeywords: bankingKeywordMatches,
         currencyMatches,
         dateMatches,
         amountMatches,
-        textDensity,
-        avgLinesPerPage: avgMeaningfulLinesPerPage
+        textDensity: Math.round(textDensity),
+        avgLinesPerPage: Math.round(avgMeaningfulLinesPerPage * 10) / 10
       }
     };
   };
@@ -298,10 +328,25 @@ const BankStatementProcessor = () => {
   };
 
   const validateUploadedFile = async (file) => {
+    const fileName = file.name;
+    
     try {
+      // Set initial validating state
+      setFileValidationResults(prev => ({
+        ...prev,
+        [fileName]: {
+          isValid: null,
+          type: 'validating',
+          message: 'Analyzing document content...'
+        }
+      }));
+
       if (file.type === 'application/pdf') {
+        addLog(`Starting validation for PDF: ${fileName}`, 'info');
+        
         // Load PDF for validation
         if (!window.pdfjsLib) {
+          addLog('Loading PDF.js library...', 'info');
           const script = document.createElement('script');
           script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
           document.head.appendChild(script);
@@ -309,85 +354,139 @@ const BankStatementProcessor = () => {
           await new Promise((resolve) => {
             script.onload = () => {
               window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+              addLog('PDF.js library loaded successfully', 'success');
               resolve();
             };
           });
         }
 
+        addLog(`Loading PDF document: ${fileName}`, 'info');
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
         
-        const validation = await validateDocument(pdf, file.name);
+        addLog(`PDF loaded successfully: ${pdf.numPages} pages`, 'success');
+        const validation = await validateDocument(pdf, fileName);
         
+        // Update validation results with detailed feedback
         setFileValidationResults(prev => ({
           ...prev,
-          [file.name]: validation
+          [fileName]: validation
         }));
 
         setFileProgress(prev => ({
           ...prev,
-          [file.name]: {
-            ...prev[file.name],
+          [fileName]: {
+            ...prev[fileName],
             status: validation.isValid ? 'validated' : 'validation_failed',
             progress: validation.isValid ? 25 : 0
           }
         }));
 
         if (validation.isValid) {
-          addLog(`✅ ${file.name}: Document validation successful`, 'success');
+          addLog(`✅ ${fileName}: Valid bank statement detected! Ready for processing.`, 'success');
         } else {
-          addLog(`❌ ${file.name}: ${validation.message}`, 'error');
+          addLog(`❌ ${fileName}: ${validation.message} - ${validation.suggestion}`, 'error');
         }
 
-      } else {
-        // Basic validation for non-PDF files
-        const validation = {
-          isValid: true,
-          type: 'text_file',
-          message: 'Text file accepted',
-          suggestion: 'Text file will be processed directly.',
-          confidence: 'medium'
-        };
+      } else if (file.type === 'text/plain' || file.type === 'text/csv' || file.name.endsWith('.txt') || file.name.endsWith('.csv')) {
+        addLog(`Validating text file: ${fileName}`, 'info');
+        
+        // Read a sample of the text file for basic validation
+        const text = await file.text();
+        const sampleText = text.substring(0, 2000); // First 2KB for analysis
+        
+        // Basic text file validation
+        let validation;
+        if (sampleText.length < 100) {
+          validation = {
+            isValid: false,
+            type: 'empty_file',
+            message: 'File appears to be empty or too small',
+            suggestion: 'Please ensure the file contains transaction data.'
+          };
+        } else if (!sampleText.match(/\d{2}\/\d{2}\/\d{4}/) && !sampleText.toLowerCase().includes('transaction')) {
+          validation = {
+            isValid: false,
+            type: 'wrong_format',
+            message: 'Text file does not appear to contain transaction data',
+            suggestion: 'Please upload a file with transaction records including dates and amounts.'
+          };
+        } else {
+          validation = {
+            isValid: true,
+            type: 'text_file',
+            message: 'Text file validated successfully',
+            suggestion: 'Text file will be processed directly.'
+          };
+        }
 
         setFileValidationResults(prev => ({
           ...prev,
-          [file.name]: validation
+          [fileName]: validation
         }));
 
         setFileProgress(prev => ({
           ...prev,
-          [file.name]: {
-            ...prev[file.name],
-            status: 'validated',
-            progress: 25
+          [fileName]: {
+            ...prev[fileName],
+            status: validation.isValid ? 'validated' : 'validation_failed',
+            progress: validation.isValid ? 25 : 0
           }
         }));
 
-        addLog(`✅ ${file.name}: Text file accepted`, 'success');
+        if (validation.isValid) {
+          addLog(`✅ ${fileName}: Text file validated successfully`, 'success');
+        } else {
+          addLog(`❌ ${fileName}: ${validation.message}`, 'error');
+        }
+      } else {
+        // Unsupported file type
+        const validation = {
+          isValid: false,
+          type: 'unsupported',
+          message: 'Unsupported file type',
+          suggestion: 'Please upload PDF, TXT, or CSV files only.'
+        };
+
+        setFileValidationResults(prev => ({
+          ...prev,
+          [fileName]: validation
+        }));
+
+        setFileProgress(prev => ({
+          ...prev,
+          [fileName]: {
+            ...prev[fileName],
+            status: 'validation_failed',
+            progress: 0
+          }
+        }));
+
+        addLog(`❌ ${fileName}: Unsupported file type`, 'error');
       }
     } catch (error) {
+      addLog(`Validation error for ${fileName}: ${error.message}`, 'error');
+      
       const validation = {
         isValid: false,
         type: 'error',
         message: `Validation failed: ${error.message}`,
-        suggestion: 'Please try uploading the file again.'
+        suggestion: 'Please try uploading the file again or check if the file is corrupted.'
       };
 
       setFileValidationResults(prev => ({
         ...prev,
-        [file.name]: validation
+        [fileName]: validation
       }));
 
       setFileProgress(prev => ({
         ...prev,
-        [file.name]: {
-          ...prev[file.name],
+        [fileName]: {
+          ...prev[fileName],
           status: 'validation_failed',
           progress: 0
         }
       }));
-
-      addLog(`❌ ${file.name}: Validation failed - ${error.message}`, 'error');
     }
   };
 
