@@ -8,6 +8,7 @@ const BankStatementProcessor = () => {
   const [logs, setLogs] = useState([]);
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
+  const [combinePDFs, setCombinePDFs] = useState(false); // Toggle for combining PDFs
   const fileInputRef = useRef(null);
 
   // Enhanced mapping rules with more MCB-specific patterns
@@ -184,21 +185,16 @@ const BankStatementProcessor = () => {
     addLog(`Opening Balance: MUR ${openingBalance.toLocaleString()}`, 'success');
     addLog(`Closing Balance: MUR ${closingBalance.toLocaleString()}`, 'success');
     
-    // Enhanced patterns for better MCB statement parsing
-    const patterns = [
-      // Pattern 1: Standard MCB format with better spacing handling
-      /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([-]?[\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\n\d{2}\/\d{2}\/\d{4}|\n\s*$|$)/gs,
-      
-      // Pattern 2: Format with currency symbols
-      /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(?:MUR\s+)?([-]?[\d,]+\.?\d*)\s+(?:MUR\s+)?([\d,]+\.?\d*)\s+(.+?)(?=\n\d{2}\/\d{2}\/\d{4}|\n\s*$|$)/gs,
-      
-      // Pattern 3: Compact format
-      /(\d{2}\/\d{2}\/\d{4})\s(\d{2}\/\d{2}\/\d{4})\s([-]?[\d,]+\.?\d*)\s([\d,]+\.?\d*)\s(.+?)(?=\n|$)/gm
-    ];
+      // Enhanced patterns for MCB statements
+    const mcbPattern1 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
+    
+    // Pattern 2: Alternative format with negative amounts: DD/MM/YYYY DD/MM/YYYY -AMOUNT BALANCE DESCRIPTION
+    const mcbPattern2 = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(-?[\d,]+\.?\d*)\s+(-?[\d,]+\.?\d*)\s+(.+?)(?=\d{2}\/\d{2}\/\d{4}|$)/gs;
     
     addLog(`Searching for MCB transaction patterns...`, 'info');
     
     let transactionCount = 0;
+    const patterns = [mcbPattern1, mcbPattern2];
     
     // Try each pattern
     for (let patternIndex = 0; patternIndex < patterns.length; patternIndex++) {
@@ -210,27 +206,27 @@ const BankStatementProcessor = () => {
       while ((match = pattern.exec(text)) !== null) {
         const [fullMatch, transDate, valueDate, amount, balance, description] = match;
         
+        // Clean up the extracted data
         const cleanDescription = description.trim().replace(/\s+/g, ' ').replace(/[\r\n]/g, '');
         const transactionAmount = parseFloat(amount.replace(/,/g, ''));
         const balanceAmount = parseFloat(balance.replace(/,/g, ''));
         
-        // Enhanced validation
+        // Validation checks
         if (cleanDescription.toLowerCase().includes('trans date') ||
             cleanDescription.toLowerCase().includes('statement page') ||
             cleanDescription.toLowerCase().includes('account number') ||
             cleanDescription.toLowerCase().includes('balance forward') ||
-            cleanDescription.toLowerCase().includes('opening balance') ||
-            cleanDescription.toLowerCase().includes('closing balance') ||
             isNaN(transactionAmount) || 
             cleanDescription.length < 3) {
+          addLog(`Skipping header/invalid: "${cleanDescription.substring(0, 50)}..."`, 'info');
           continue;
         }
         
-        // Check for duplicate transactions with better matching
+        // Check for duplicate transactions
         const isDuplicate = transactions.some(t => 
           t.transactionDate === transDate && 
           t.description === cleanDescription && 
-          Math.abs(t.amount - Math.abs(transactionAmount)) < 0.01
+          t.amount === Math.abs(transactionAmount)
         );
         
         if (isDuplicate) {
@@ -242,11 +238,11 @@ const BankStatementProcessor = () => {
           transactionDate: transDate,
           valueDate: valueDate,
           description: cleanDescription,
-          amount: Math.abs(transactionAmount),
+          amount: Math.abs(transactionAmount), // Always use absolute value
           balance: Math.abs(balanceAmount),
           sourceFile: fileName,
           originalLine: fullMatch.trim(),
-          rawAmount: amount,
+          rawAmount: amount, // Keep original for debugging
           isDebit: transactionAmount < 0 || amount.includes('-')
         });
         
@@ -254,6 +250,7 @@ const BankStatementProcessor = () => {
         addLog(`Transaction ${transactionCount}: ${transDate} - ${cleanDescription.substring(0, 40)}... - MUR ${Math.abs(transactionAmount)} ${transactionAmount < 0 ? '(Debit)' : '(Credit)'}`, 'success');
       }
       
+      // If we found transactions with this pattern, don't try others
       if (transactionCount > 0) {
         addLog(`Pattern ${patternIndex + 1} successful - ${transactionCount} transactions found`, 'success');
         break;
@@ -845,6 +842,24 @@ const BankStatementProcessor = () => {
             <p className="text-gray-600 mb-6">
               PDF and text files supported - Enhanced pattern recognition for MCB statements
             </p>
+            
+            {/* Toggle for combining PDFs */}
+            <div className="mb-6">
+              <label className="flex items-center justify-center space-x-3">
+                <input
+                  type="checkbox"
+                  checked={combinePDFs}
+                  onChange={(e) => setCombinePDFs(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span className="text-gray-700 font-medium">
+                  Combine all files into single Excel sheet
+                </span>
+              </label>
+              <p className="text-sm text-gray-500 mt-1 text-center">
+                {combinePDFs ? "All transactions will be merged into one report" : "Each file will be processed separately"}
+              </p>
+            </div>
             
             <input
               ref={fileInputRef}
