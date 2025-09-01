@@ -9,6 +9,7 @@ const BankStatementProcessor = () => {
   const [uncategorizedData, setUncategorizedData] = useState([]);
   const [fileStats, setFileStats] = useState({});
   const [combinePDFs, setCombinePDFs] = useState(false);
+  const [consolidatedExport, setConsolidatedExport] = useState(false);
   const [fileProgress, setFileProgress] = useState({});
   const [processingStats, setProcessingStats] = useState({ completed: 0, total: 0, failed: 0 });
   const [fileValidationResults, setFileValidationResults] = useState({});
@@ -803,121 +804,291 @@ const BankStatementProcessor = () => {
     };
     
     loadXLSX().then(XLSX => {
-      const wb = XLSX.utils.book_new();
-      const timestamp = new Date().toLocaleString();
-      
-      const summaryData = [
-        ['ENHANCED BANK STATEMENT PROCESSING REPORT - WITH FIXED VALIDATION'],
-        ['Generated:', timestamp],
-        ['Files Processed:', Object.keys(fileStats).filter(k => k !== 'balanceInfo').length],
-        [''],
-        ['SUMMARY BY CATEGORY'],
-        ['Category', 'Count', 'Total Amount (MUR)', 'Avg Amount (MUR)', 'Percentage'],
-      ];
-      
-      const totalAmount = Object.values(results).flat().reduce((sum, t) => sum + (t.amount || 0), 0);
-      const totalCount = Object.values(results).flat().length;
-      
-      Object.entries(results).forEach(([category, transactions]) => {
-        if (transactions.length > 0) {
-          const total = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-          const avg = total / transactions.length;
-          const percentage = totalAmount > 0 ? ((total / totalAmount) * 100).toFixed(1) + '%' : '0%';
-          summaryData.push([category, transactions.length, total.toFixed(2), avg.toFixed(2), percentage]);
+      if (consolidatedExport) {
+        // Generate consolidated Excel with document headers
+        generateConsolidatedExcel(XLSX);
+      } else {
+        // Generate individual Excel files (existing behavior)
+        generateIndividualExcel(XLSX);
+      }
+    });
+  };
+
+  const generateConsolidatedExcel = (XLSX) => {
+    const wb = XLSX.utils.book_new();
+    const timestamp = new Date().toLocaleString();
+    
+    // Create consolidated data with document headers
+    const consolidatedData = [
+      ['BANK STATEMENT PROCESSING REPORT - CONSOLIDATED'],
+      ['Generated:', timestamp],
+      [''],
+    ];
+
+    // Group transactions by source file
+    const transactionsByFile = {};
+    
+    // Collect all transactions and group by file
+    Object.entries(results).forEach(([category, transactions]) => {
+      transactions.forEach(transaction => {
+        const fileName = transaction.sourceFile;
+        if (!transactionsByFile[fileName]) {
+          transactionsByFile[fileName] = [];
         }
-      });
-      
-      summaryData.push(['']);
-      summaryData.push(['OVERALL STATISTICS']);
-      summaryData.push(['Total Transactions:', totalCount + uncategorizedData.length]);
-      summaryData.push(['Categorized:', totalCount]);
-      summaryData.push(['Uncategorized:', uncategorizedData.length]);
-      summaryData.push(['Success Rate:', `${totalCount > 0 ? ((totalCount / (totalCount + uncategorizedData.length)) * 100).toFixed(1) : 0}%`]);
-      summaryData.push(['Total Amount:', `MUR ${totalAmount.toLocaleString()}`]);
-      
-      const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
-      XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
-      
-      const transactionData = [
-        ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status', 'Confidence']
-      ];
-      
-      Object.entries(results).forEach(([category, transactions]) => {
-        transactions.forEach(transaction => {
-          transactionData.push([
-            transaction.transactionDate,
-            transaction.valueDate,
-            transaction.description,
-            transaction.amount.toFixed(2),
-            transaction.balance.toFixed(2),
-            category,
-            transaction.sourceFile,
-            'Categorized',
-            transaction.confidence || 'high'
-          ]);
+        transactionsByFile[fileName].push({
+          ...transaction,
+          category: category
         });
       });
+    });
+
+    // Add uncategorized transactions to their respective files
+    uncategorizedData.forEach(transaction => {
+      const fileName = transaction.sourceFile;
+      if (!transactionsByFile[fileName]) {
+        transactionsByFile[fileName] = [];
+      }
+      transactionsByFile[fileName].push({
+        ...transaction,
+        category: 'UNCATEGORIZED'
+      });
+    });
+
+    let documentNumber = 1;
+    let totalTransactionsAcrossFiles = 0;
+    let grandTotalAmount = 0;
+
+    // Process each file
+    Object.entries(transactionsByFile).forEach(([fileName, transactions]) => {
+      const fileStats = fileStats[fileName] || { openingBalance: 0, closingBalance: 0 };
       
-      uncategorizedData.forEach(transaction => {
+      // Sort transactions by date
+      transactions.sort((a, b) => {
+        const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+        const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+        return dateA - dateB;
+      });
+
+      // Calculate totals for this document
+      const docTotalAmount = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+      totalTransactionsAcrossFiles += transactions.length;
+      grandTotalAmount += docTotalAmount;
+
+      // Add document header
+      consolidatedData.push([
+        '==============================================='
+      ]);
+      consolidatedData.push([
+        `📄 DOCUMENT ${documentNumber}: ${fileName}`
+      ]);
+      consolidatedData.push([
+        `Opening Balance: MUR ${fileStats.openingBalance?.toLocaleString() || '0'} | Closing Balance: MUR ${fileStats.closingBalance?.toLocaleString() || '0'}`
+      ]);
+      consolidatedData.push([
+        `Transactions: ${transactions.length} | Total Amount: MUR ${docTotalAmount.toLocaleString()}`
+      ]);
+      consolidatedData.push(['']);
+
+      // Add transaction headers
+      consolidatedData.push([
+        'Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Status'
+      ]);
+      consolidatedData.push([
+        '--------', '--------', '------------------------', '---------', '---------', '----------', '--------'
+      ]);
+
+      // Add transactions for this document
+      transactions.forEach(transaction => {
+        consolidatedData.push([
+          transaction.transactionDate,
+          transaction.valueDate || transaction.transactionDate,
+          transaction.description,
+          transaction.amount?.toFixed(2) || '0.00',
+          transaction.balance?.toFixed(2) || '0.00',
+          transaction.category,
+          transaction.category === 'UNCATEGORIZED' ? 'Needs Review' : 'Categorized'
+        ]);
+      });
+
+      consolidatedData.push(['']); // Empty row after each document
+      documentNumber++;
+    });
+
+    // Add overall summary
+    consolidatedData.push([
+      '==============================================='
+    ]);
+    consolidatedData.push(['OVERALL SUMMARY']);
+    consolidatedData.push(['===============================================']);
+    consolidatedData.push([`Total Documents Processed: ${Object.keys(transactionsByFile).length}`]);
+    consolidatedData.push([`Total Transactions: ${totalTransactionsAcrossFiles}`]);
+    consolidatedData.push([`Grand Total Amount: MUR ${grandTotalAmount.toLocaleString()}`]);
+    
+    const categorySummary = {};
+    Object.entries(results).forEach(([category, transactions]) => {
+      categorySummary[category] = {
+        count: transactions.length,
+        amount: transactions.reduce((sum, t) => sum + (t.amount || 0), 0)
+      };
+    });
+
+    if (uncategorizedData.length > 0) {
+      categorySummary['UNCATEGORIZED'] = {
+        count: uncategorizedData.length,
+        amount: uncategorizedData.reduce((sum, t) => sum + (t.amount || 0), 0)
+      };
+    }
+
+    consolidatedData.push(['']);
+    consolidatedData.push(['CATEGORY BREAKDOWN:']);
+    Object.entries(categorySummary).forEach(([category, data]) => {
+      consolidatedData.push([
+        `${category}: ${data.count} transactions, MUR ${data.amount.toLocaleString()}`
+      ]);
+    });
+
+    // Create the worksheet
+    const ws = XLSX.utils.aoa_to_sheet(consolidatedData);
+    
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 12 }, { wch: 12 }, { wch: 50 }, { wch: 15 }, 
+      { wch: 15 }, { wch: 20 }, { wch: 12 }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, "Consolidated Report");
+
+    // Generate and download the file
+    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Consolidated_Bank_Statement_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    URL.revokeObjectURL(url);
+    addLog(`Consolidated Excel report downloaded with ${Object.keys(transactionsByFile).length} documents!`, 'success');
+  };
+
+  const generateIndividualExcel = (XLSX) => {
+    // Existing individual Excel generation logic
+    const wb = XLSX.utils.book_new();
+    const timestamp = new Date().toLocaleString();
+    
+    const summaryData = [
+      ['ENHANCED BANK STATEMENT PROCESSING REPORT - WITH FIXED VALIDATION'],
+      ['Generated:', timestamp],
+      ['Files Processed:', Object.keys(fileStats).filter(k => k !== 'balanceInfo').length],
+      [''],
+      ['SUMMARY BY CATEGORY'],
+      ['Category', 'Count', 'Total Amount (MUR)', 'Avg Amount (MUR)', 'Percentage'],
+    ];
+    
+    const totalAmount = Object.values(results).flat().reduce((sum, t) => sum + (t.amount || 0), 0);
+    const totalCount = Object.values(results).flat().length;
+    
+    Object.entries(results).forEach(([category, transactions]) => {
+      if (transactions.length > 0) {
+        const total = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+        const avg = total / transactions.length;
+        const percentage = totalAmount > 0 ? ((total / totalAmount) * 100).toFixed(1) + '%' : '0%';
+        summaryData.push([category, transactions.length, total.toFixed(2), avg.toFixed(2), percentage]);
+      }
+    });
+    
+    summaryData.push(['']);
+    summaryData.push(['OVERALL STATISTICS']);
+    summaryData.push(['Total Transactions:', totalCount + uncategorizedData.length]);
+    summaryData.push(['Categorized:', totalCount]);
+    summaryData.push(['Uncategorized:', uncategorizedData.length]);
+    summaryData.push(['Success Rate:', `${totalCount > 0 ? ((totalCount / (totalCount + uncategorizedData.length)) * 100).toFixed(1) : 0}%`]);
+    summaryData.push(['Total Amount:', `MUR ${totalAmount.toLocaleString()}`]);
+    
+    const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
+    
+    const transactionData = [
+      ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Status', 'Confidence']
+    ];
+    
+    Object.entries(results).forEach(([category, transactions]) => {
+      transactions.forEach(transaction => {
         transactionData.push([
           transaction.transactionDate,
           transaction.valueDate,
           transaction.description,
           transaction.amount.toFixed(2),
           transaction.balance.toFixed(2),
-          'UNCATEGORIZED',
+          category,
           transaction.sourceFile,
-          'Needs Review',
-          'none'
+          'Categorized',
+          transaction.confidence || 'high'
+        ]);
+      });
+    });
+    
+    uncategorizedData.forEach(transaction => {
+      transactionData.push([
+        transaction.transactionDate,
+        transaction.valueDate,
+        transaction.description,
+        transaction.amount.toFixed(2),
+        transaction.balance.toFixed(2),
+        'UNCATEGORIZED',
+        transaction.sourceFile,
+        'Needs Review',
+        'none'
+      ]);
+    });
+    
+    const transactionWS = XLSX.utils.aoa_to_sheet(transactionData);
+    transactionWS['!cols'] = [
+      { wch: 12 }, { wch: 12 }, { wch: 50 }, { wch: 15 }, 
+      { wch: 15 }, { wch: 20 }, { wch: 25 }, { wch: 12 }, { wch: 10 }
+    ];
+    
+    XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
+    
+    if (uncategorizedData.length > 0) {
+      const uncategorizedSheetData = [
+        ['Date', 'Description', 'Amount (MUR)', 'Source File', 'Suggested Category', 'Manual Category']
+      ];
+      
+      uncategorizedData.forEach(transaction => {
+        uncategorizedSheetData.push([
+          transaction.transactionDate,
+          transaction.description,
+          transaction.amount,
+          transaction.sourceFile,
+          '',
+          ''
         ]);
       });
       
-      const transactionWS = XLSX.utils.aoa_to_sheet(transactionData);
-      transactionWS['!cols'] = [
-        { wch: 12 }, { wch: 12 }, { wch: 50 }, { wch: 15 }, 
-        { wch: 15 }, { wch: 20 }, { wch: 25 }, { wch: 12 }, { wch: 10 }
+      const uncategorizedWS = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
+      uncategorizedWS['!cols'] = [
+        { wch: 12 }, { wch: 50 }, { wch: 15 }, 
+        { wch: 25 }, { wch: 20 }, { wch: 20 }
       ];
       
-      XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
-      
-      if (uncategorizedData.length > 0) {
-        const uncategorizedSheetData = [
-          ['Date', 'Description', 'Amount (MUR)', 'Source File', 'Suggested Category', 'Manual Category']
-        ];
-        
-        uncategorizedData.forEach(transaction => {
-          uncategorizedSheetData.push([
-            transaction.transactionDate,
-            transaction.description,
-            transaction.amount,
-            transaction.sourceFile,
-            '',
-            ''
-          ]);
-        });
-        
-        const uncategorizedWS = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
-        uncategorizedWS['!cols'] = [
-          { wch: 12 }, { wch: 50 }, { wch: 15 }, 
-          { wch: 25 }, { wch: 20 }, { wch: 20 }
-        ];
-        
-        XLSX.utils.book_append_sheet(wb, uncategorizedWS, "Uncategorized");
-      }
-      
-      const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `Enhanced_Flippable_Cards_Bank_Statement_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      
-      URL.revokeObjectURL(url);
-      addLog('Enhanced Excel report with flippable cards downloaded!', 'success');
-    });
+      XLSX.utils.book_append_sheet(wb, uncategorizedWS, "Uncategorized");
+    }
+    
+    const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Enhanced_Individual_Bank_Statement_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    
+    URL.revokeObjectURL(url);
+    addLog('Individual Excel reports downloaded!', 'success');
   };
 
   const getBalanceStats = () => {
@@ -1109,7 +1280,7 @@ const BankStatementProcessor = () => {
             Enhanced Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with FLIPPABLE CARDS - Click any card to see detailed information
+            Advanced PDF processing with FLIPPABLE CARDS & EXPORT OPTIONS - Click any card to see detailed information
           </p>
         </div>
 
@@ -1204,18 +1375,18 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF and text files supported - Enhanced with FLIPPABLE ANALYTICS CARDS
+              PDF and text files supported - Enhanced with FLIPPABLE ANALYTICS CARDS & EXPORT OPTIONS
             </p>
             
             <div className="bg-purple-50 rounded-lg p-4 mb-6 border-l-4 border-purple-400">
               <div className="flex items-center justify-center mb-3">
                 <RotateCcw className="h-5 w-5 text-purple-600 mr-2" />
-                <span className="text-purple-800 font-medium">NEW: INTERACTIVE FLIPPABLE CARDS</span>
+                <span className="text-purple-800 font-medium">NEW: CONSOLIDATED & INDIVIDUAL EXPORT OPTIONS</span>
               </div>
               <div className="text-sm text-purple-700 space-y-1">
-                <div>• Click any analytics card above to see detailed breakdown</div>
-                <div>• 3D flip animation reveals hidden insights and statistics</div>
-                <div>• Enhanced user experience with comprehensive data visualization</div>
+                <div>• Choose between Individual Excel per document OR Consolidated Excel with headers</div>
+                <div>• Consolidated mode groups all transactions by document with clear separators</div>
+                <div>• Interactive flippable cards reveal detailed insights and statistics</div>
               </div>
             </div>
             
@@ -1419,13 +1590,44 @@ const BankStatementProcessor = () => {
               <h3 className="text-xl font-medium text-gray-800">
                 Categorized Transactions
               </h3>
-              <button
-                onClick={generateExcel}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
-              >
-                <Download className="h-5 w-5 mr-2" />
-                Download Enhanced Report
-              </button>
+              <div className="flex items-center space-x-4">
+                {/* Export Options Toggle */}
+                <div className="bg-gray-50 rounded-lg p-3 border">
+                  <h4 className="text-sm font-medium text-gray-800 mb-3">Export Options</h4>
+                  <div className="space-y-2">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="exportType"
+                        value="individual"
+                        checked={!consolidatedExport}
+                        onChange={() => setConsolidatedExport(false)}
+                        className="mr-2 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700">Individual Excel per document</span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="exportType"
+                        value="consolidated"
+                        checked={consolidatedExport}
+                        onChange={() => setConsolidatedExport(true)}
+                        className="mr-2 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700">Single consolidated Excel with headers</span>
+                    </label>
+                  </div>
+                </div>
+                
+                <button
+                  onClick={generateExcel}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
+                >
+                  <Download className="h-5 w-5 mr-2" />
+                  Download {consolidatedExport ? 'Consolidated' : 'Individual'} Report
+                </button>
+              </div>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1461,7 +1663,7 @@ const BankStatementProcessor = () => {
 
         <div className="text-center mt-8 py-6 border-t">
           <p className="text-gray-600 text-sm">
-            Enhanced Bank Statement Processor v9.0 - Now with Interactive Flippable Analytics Cards
+            Enhanced Bank Statement Processor v10.0 - Now with Export Options: Individual OR Consolidated Excel Reports
           </p>
         </div>
       </div>
