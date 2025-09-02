@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign, ThumbsUp, AlertTriangle, Shield, X, RotateCcw } from 'lucide-react';
+import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, Info, TrendingUp, DollarSign, ThumbsUp, AlertTriangle, Shield, X, RotateCcw, Files, File } from 'lucide-react';
 
 const BankStatementProcessor = () => {
   const [files, setFiles] = useState([]);
@@ -13,7 +13,7 @@ const BankStatementProcessor = () => {
   const [fileProgress, setFileProgress] = useState({});
   const [processingStats, setProcessingStats] = useState({ completed: 0, total: 0, failed: 0 });
   const [fileValidationResults, setFileValidationResults] = useState({});
-  const [flippedCards, setFlippedCards] = useState({}); // New state for card flips
+  const [flippedCards, setFlippedCards] = useState({});
   const fileInputRef = useRef(null);
 
   // Flip card handler
@@ -89,6 +89,7 @@ const BankStatementProcessor = () => {
     'CAR': 'Transport',
     'VEHICLE': 'Transport'
   };
+
   const addLog = (message, type = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     setLogs(prev => [...prev, { message, type, timestamp }]);
@@ -144,6 +145,7 @@ const BankStatementProcessor = () => {
       message: 'Bank statement detected - Ready for processing!'
     };
   };
+
   const handleFileUpload = async (event) => {
     const uploadedFiles = Array.from(event.target.files);
     setFiles(uploadedFiles);
@@ -154,7 +156,7 @@ const BankStatementProcessor = () => {
     setFileProgress({});
     setFileValidationResults({});
     setProcessingStats({ completed: 0, total: 0, failed: 0 });
-    setFlippedCards({}); // Reset flipped cards on new upload
+    setFlippedCards({});
     
     const initialProgress = {};
     uploadedFiles.forEach(file => {
@@ -280,6 +282,7 @@ const BankStatementProcessor = () => {
       [fileName]: { ...prev[fileName], ...updates }
     }));
   };
+
   const extractTextFromPDF = async (file) => {
     try {
       addLog(`Reading PDF: ${file.name}...`, 'info');
@@ -343,7 +346,10 @@ const BankStatementProcessor = () => {
     }
   };
 
-  const processSingleFile = async (file) => {
+// ============================================================
+// PASTE SECTION 2 HERE (Processing and Transaction Functions)
+// ============================================================
+const processSingleFile = async (file) => {
     const fileName = file.name;
     
     try {
@@ -408,6 +414,7 @@ const BankStatementProcessor = () => {
       };
     }
   };
+
   const extractTransactionsFromText = (text, fileName) => {
     const transactions = [];
     
@@ -638,6 +645,7 @@ const BankStatementProcessor = () => {
     
     return { category: 'UNCATEGORIZED', matched: false, keyword: null, confidence: 'none' };
   };
+
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('Please upload files first', 'error');
@@ -783,7 +791,10 @@ const BankStatementProcessor = () => {
     }
   };
 
-  const generateExcel = () => {
+// ==========================================================
+// PASTE SECTION 3 HERE (Excel Generation and Helper Functions)
+// ==========================================================
+const generateExcel = () => {
     if (!results) {
       addLog('No results to download', 'error');
       return;
@@ -805,10 +816,8 @@ const BankStatementProcessor = () => {
     
     loadXLSX().then(XLSX => {
       if (consolidatedExport) {
-        // Generate consolidated Excel with document headers
         generateConsolidatedExcel(XLSX);
       } else {
-        // Generate individual Excel files (existing behavior)
         generateIndividualExcel(XLSX);
       }
     });
@@ -818,17 +827,14 @@ const BankStatementProcessor = () => {
     const wb = XLSX.utils.book_new();
     const timestamp = new Date().toLocaleString();
     
-    // Create consolidated data with document headers
     const consolidatedData = [
       ['BANK STATEMENT PROCESSING REPORT - CONSOLIDATED'],
       ['Generated:', timestamp],
       [''],
     ];
 
-    // Group transactions by source file
     const transactionsByFile = {};
     
-    // Collect all transactions and group by file
     Object.entries(results).forEach(([category, transactions]) => {
       transactions.forEach(transaction => {
         const fileName = transaction.sourceFile;
@@ -842,7 +848,6 @@ const BankStatementProcessor = () => {
       });
     });
 
-    // Add uncategorized transactions to their respective files
     uncategorizedData.forEach(transaction => {
       const fileName = transaction.sourceFile;
       if (!transactionsByFile[fileName]) {
@@ -858,23 +863,19 @@ const BankStatementProcessor = () => {
     let totalTransactionsAcrossFiles = 0;
     let grandTotalAmount = 0;
 
-    // Process each file
     Object.entries(transactionsByFile).forEach(([fileName, transactions]) => {
-      const fileStats = fileStats[fileName] || { openingBalance: 0, closingBalance: 0 };
+      const fileStatsLocal = fileStats[fileName] || { openingBalance: 0, closingBalance: 0 };
       
-      // Sort transactions by date
       transactions.sort((a, b) => {
         const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
         const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
         return dateA - dateB;
       });
 
-      // Calculate totals for this document
       const docTotalAmount = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
       totalTransactionsAcrossFiles += transactions.length;
       grandTotalAmount += docTotalAmount;
 
-      // Add document header
       consolidatedData.push([
         '==============================================='
       ]);
@@ -882,14 +883,13 @@ const BankStatementProcessor = () => {
         `📄 DOCUMENT ${documentNumber}: ${fileName}`
       ]);
       consolidatedData.push([
-        `Opening Balance: MUR ${fileStats.openingBalance?.toLocaleString() || '0'} | Closing Balance: MUR ${fileStats.closingBalance?.toLocaleString() || '0'}`
+        `Opening Balance: MUR ${fileStatsLocal.openingBalance?.toLocaleString() || '0'} | Closing Balance: MUR ${fileStatsLocal.closingBalance?.toLocaleString() || '0'}`
       ]);
       consolidatedData.push([
         `Transactions: ${transactions.length} | Total Amount: MUR ${docTotalAmount.toLocaleString()}`
       ]);
       consolidatedData.push(['']);
 
-      // Add transaction headers
       consolidatedData.push([
         'Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Status'
       ]);
@@ -897,7 +897,6 @@ const BankStatementProcessor = () => {
         '--------', '--------', '------------------------', '---------', '---------', '----------', '--------'
       ]);
 
-      // Add transactions for this document
       transactions.forEach(transaction => {
         consolidatedData.push([
           transaction.transactionDate,
@@ -910,11 +909,10 @@ const BankStatementProcessor = () => {
         ]);
       });
 
-      consolidatedData.push(['']); // Empty row after each document
+      consolidatedData.push(['']);
       documentNumber++;
     });
 
-    // Add overall summary
     consolidatedData.push([
       '==============================================='
     ]);
@@ -947,10 +945,8 @@ const BankStatementProcessor = () => {
       ]);
     });
 
-    // Create the worksheet
     const ws = XLSX.utils.aoa_to_sheet(consolidatedData);
     
-    // Set column widths
     ws['!cols'] = [
       { wch: 12 }, { wch: 12 }, { wch: 50 }, { wch: 15 }, 
       { wch: 15 }, { wch: 20 }, { wch: 12 }
@@ -958,7 +954,6 @@ const BankStatementProcessor = () => {
 
     XLSX.utils.book_append_sheet(wb, ws, "Consolidated Report");
 
-    // Generate and download the file
     const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = URL.createObjectURL(blob);
@@ -974,7 +969,6 @@ const BankStatementProcessor = () => {
   };
 
   const generateIndividualExcel = (XLSX) => {
-    // Existing individual Excel generation logic
     const wb = XLSX.utils.book_new();
     const timestamp = new Date().toLocaleString();
     
@@ -1168,7 +1162,6 @@ const BankStatementProcessor = () => {
     return { total, valid, invalid, pending };
   };
 
-  // Enhanced Flippable Card Component
   const FlippableCard = ({ cardId, icon: Icon, frontTitle, frontValue, frontSubtitle, backContent, color = 'blue' }) => {
     const isFlipped = flippedCards[cardId];
     
@@ -1198,7 +1191,6 @@ const BankStatementProcessor = () => {
           }`}
           style={{ transformStyle: 'preserve-3d' }}
         >
-          {/* Front Face */}
           <div 
             className="absolute inset-0 w-full h-full bg-white rounded-lg p-4 shadow-sm border flex items-center backface-hidden"
             style={{ backfaceVisibility: 'hidden' }}
@@ -1211,7 +1203,6 @@ const BankStatementProcessor = () => {
             <RotateCcw className="h-4 w-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
           </div>
           
-          {/* Back Face */}
           <div 
             className="absolute inset-0 w-full h-full bg-white rounded-lg p-4 shadow-sm border backface-hidden"
             style={{ 
@@ -1243,7 +1234,10 @@ const BankStatementProcessor = () => {
     );
   };
 
-  const { 
+// ================================================
+// PASTE SECTION 4 HERE (React Component JSX Return)
+// ================================================
+const { 
     totalTransactions, 
     openingBalance, 
     closingBalance, 
@@ -1263,7 +1257,6 @@ const BankStatementProcessor = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Add CSS for 3D flip effects */}
       <style>{`
         .rotate-y-180 { transform: rotateY(180deg); }
         .transform-style-preserve-3d { transform-style: preserve-3d; }
@@ -1280,7 +1273,7 @@ const BankStatementProcessor = () => {
             Enhanced Bank Statement Processor
           </h1>
           <p className="text-gray-600 text-lg">
-            Advanced PDF processing with FLIPPABLE CARDS & EXPORT OPTIONS - Click any card to see detailed information
+            Advanced batch processing with comprehensive document validation & interactive analytics
           </p>
         </div>
 
@@ -1368,7 +1361,6 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
-        {/* Export Options - Prominently displayed at top */}
         <div className="bg-white rounded-xl shadow-sm border p-6 mb-6">
           <div className="flex items-center justify-center mb-4">
             <Download className="h-6 w-6 text-blue-600 mr-3" />
@@ -1413,27 +1405,80 @@ const BankStatementProcessor = () => {
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border p-8 mb-6">
-          <div className="text-center">
+          <div className="text-center mb-8">
             <Upload className="mx-auto h-16 w-16 text-blue-500 mb-4" />
-            <h3 className="text-2xl font-medium text-gray-900 mb-2">
+            <h3 className="text-3xl font-medium text-gray-900 mb-2">
               Upload Bank Statements
             </h3>
-            <p className="text-gray-600 mb-6">
-              PDF and text files supported - Enhanced with FLIPPABLE ANALYTICS CARDS
+            <p className="text-gray-600 mb-6 text-lg">
+              Process single documents or multiple statements in batch
             </p>
-            
-            <div className="bg-purple-50 rounded-lg p-4 mb-6 border-l-4 border-purple-400">
-              <div className="flex items-center justify-center mb-3">
-                <RotateCcw className="h-5 w-5 text-purple-600 mr-2" />
-                <span className="text-purple-800 font-medium">INTERACTIVE FLIPPABLE ANALYTICS CARDS</span>
-              </div>
-              <div className="text-sm text-purple-700 space-y-1">
-                <div>• Click any analytics card to see detailed breakdown</div>
-                <div>• 3D flip animation reveals hidden insights and statistics</div>
-                <div>• Export format selected above will be used for downloads</div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-6 mb-8">
+            <div className="bg-blue-50 rounded-lg p-6 border-2 border-blue-200 hover:border-blue-300 transition-all">
+              <div className="text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-100 rounded-lg mb-4">
+                  <File className="h-6 w-6 text-blue-600" />
+                </div>
+                <h4 className="text-xl font-semibold text-blue-800 mb-3">Single Document</h4>
+                <p className="text-blue-700 text-sm mb-4">
+                  Perfect for processing individual bank statements with detailed analysis
+                </p>
+                <ul className="text-blue-600 text-sm space-y-2 text-left">
+                  <li>• Detailed transaction breakdown</li>
+                  <li>• Individual Excel report</li>
+                  <li>• Quick processing time</li>
+                  <li>• Perfect for monthly statements</li>
+                </ul>
               </div>
             </div>
-            
+
+            <div className="bg-green-50 rounded-lg p-6 border-2 border-green-200 hover:border-green-300 transition-all">
+              <div className="text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 bg-green-100 rounded-lg mb-4">
+                  <Files className="h-6 w-6 text-green-600" />
+                </div>
+                <h4 className="text-xl font-semibold text-green-800 mb-3">Batch Processing</h4>
+                <p className="text-green-700 text-sm mb-4">
+                  <strong>Process up to 20 PDFs simultaneously</strong> for quarterly/yearly analysis
+                </p>
+                <ul className="text-green-600 text-sm space-y-2 text-left">
+                  <li>• Consolidated or individual Excel exports</li>
+                  <li>• Perfect for quarterly/yearly analysis</li>
+                  <li>• Parallel processing for speed</li>
+                  <li>• Cross-document analytics</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-6 border border-purple-200 mb-6">
+            <h4 className="text-lg font-semibold text-purple-800 mb-4 text-center">
+              📋 HOW TO UPLOAD MULTIPLE FILES (Batch Processing)
+            </h4>
+            <div className="grid md:grid-cols-3 gap-4 text-sm">
+              <div className="bg-white rounded-lg p-4 border border-purple-100">
+                <h5 className="font-medium text-purple-700 mb-2">Method 1: Ctrl+Click</h5>
+                <p className="text-purple-600">Hold <kbd className="bg-purple-100 px-2 py-1 rounded text-xs">Ctrl</kbd> while clicking multiple files</p>
+              </div>
+              <div className="bg-white rounded-lg p-4 border border-purple-100">
+                <h5 className="font-medium text-purple-700 mb-2">Method 2: Shift+Click</h5>
+                <p className="text-purple-600">Click first file, hold <kbd className="bg-purple-100 px-2 py-1 rounded text-xs">Shift</kbd>, click last file</p>
+              </div>
+              <div className="bg-white rounded-lg p-4 border border-purple-100">
+                <h5 className="font-medium text-purple-700 mb-2">Method 3: Drag & Drop</h5>
+                <p className="text-purple-600">Select multiple files in your file manager and drag here</p>
+              </div>
+            </div>
+            <div className="text-center mt-4">
+              <p className="text-purple-600 text-xs">
+                <strong>Mac users:</strong> Use <kbd className="bg-purple-100 px-2 py-1 rounded text-xs">Cmd</kbd> instead of Ctrl
+              </p>
+            </div>
+          </div>
+
+          <div className="text-center">
             <input
               ref={fileInputRef}
               type="file"
@@ -1445,11 +1490,17 @@ const BankStatementProcessor = () => {
             
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
+              className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700 text-white px-10 py-4 rounded-lg font-medium text-lg transition-all inline-flex items-center shadow-lg hover:shadow-xl transform hover:scale-105"
             >
-              <Upload className="h-5 w-5 mr-2" />
-              Choose Files
+              <Upload className="h-6 w-6 mr-3" />
+              Choose Files (Single or Multiple)
             </button>
+            
+            <div className="mt-4 text-sm text-gray-600 space-y-1">
+              <p><strong>Supported formats:</strong> PDF, TXT, CSV</p>
+              <p><strong>Maximum file size:</strong> 10MB per file • <strong>Batch limit:</strong> 20 files</p>
+              <p><strong>Processing:</strong> Individual analysis + Batch consolidation options</p>
+            </div>
             
             {files.length > 0 && (
               <div className="mt-6">
@@ -1677,7 +1728,7 @@ const BankStatementProcessor = () => {
 
         <div className="text-center mt-8 py-6 border-t">
           <p className="text-gray-600 text-sm">
-            Enhanced Bank Statement Processor v10.0 - Now with Export Options: Individual OR Consolidated Excel Reports
+            Enhanced Bank Statement Processor v12.0 - Complete with Intuitive Batch Processing Interface
           </p>
         </div>
       </div>
