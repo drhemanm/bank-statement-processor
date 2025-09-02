@@ -1368,6 +1368,50 @@ const BankStatementProcessor = () => {
           </div>
         )}
 
+        {/* Export Options - Prominently displayed at top */}
+        <div className="bg-white rounded-xl shadow-sm border p-6 mb-6">
+          <div className="flex items-center justify-center mb-4">
+            <Download className="h-6 w-6 text-blue-600 mr-3" />
+            <h3 className="text-xl font-semibold text-gray-800">Export Options</h3>
+          </div>
+          
+          <div className="flex justify-center">
+            <div className="bg-blue-50 rounded-lg p-6 border-2 border-blue-200">
+              <h4 className="text-lg font-medium text-blue-800 mb-4 text-center">Choose Your Export Format</h4>
+              <div className="space-y-4">
+                <label className="flex items-center p-3 bg-white rounded-lg border-2 border-transparent hover:border-blue-300 cursor-pointer transition-all">
+                  <input
+                    type="radio"
+                    name="exportType"
+                    value="individual"
+                    checked={!consolidatedExport}
+                    onChange={() => setConsolidatedExport(false)}
+                    className="mr-3 w-5 h-5 text-blue-600 focus:ring-blue-500 focus:ring-2"
+                  />
+                  <div>
+                    <span className="text-base font-medium text-gray-800">Individual Excel per document</span>
+                    <p className="text-sm text-gray-600 mt-1">Separate Excel file for each bank statement with detailed analysis</p>
+                  </div>
+                </label>
+                <label className="flex items-center p-3 bg-white rounded-lg border-2 border-transparent hover:border-blue-300 cursor-pointer transition-all">
+                  <input
+                    type="radio"
+                    name="exportType"
+                    value="consolidated"
+                    checked={consolidatedExport}
+                    onChange={() => setConsolidatedExport(true)}
+                    className="mr-3 w-5 h-5 text-blue-600 focus:ring-blue-500 focus:ring-2"
+                  />
+                  <div>
+                    <span className="text-base font-medium text-gray-800">Single consolidated Excel with headers</span>
+                    <p className="text-sm text-gray-600 mt-1">All documents in one Excel file with clear document separators</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="bg-white rounded-xl shadow-sm border p-8 mb-6">
           <div className="text-center">
             <Upload className="mx-auto h-16 w-16 text-blue-500 mb-4" />
@@ -1375,18 +1419,18 @@ const BankStatementProcessor = () => {
               Upload Bank Statements
             </h3>
             <p className="text-gray-600 mb-6">
-              PDF and text files supported - Enhanced with FLIPPABLE ANALYTICS CARDS & EXPORT OPTIONS
+              PDF and text files supported - Enhanced with FLIPPABLE ANALYTICS CARDS
             </p>
             
             <div className="bg-purple-50 rounded-lg p-4 mb-6 border-l-4 border-purple-400">
               <div className="flex items-center justify-center mb-3">
                 <RotateCcw className="h-5 w-5 text-purple-600 mr-2" />
-                <span className="text-purple-800 font-medium">NEW: CONSOLIDATED & INDIVIDUAL EXPORT OPTIONS</span>
+                <span className="text-purple-800 font-medium">INTERACTIVE FLIPPABLE ANALYTICS CARDS</span>
               </div>
               <div className="text-sm text-purple-700 space-y-1">
-                <div>• Choose between Individual Excel per document OR Consolidated Excel with headers</div>
-                <div>• Consolidated mode groups all transactions by document with clear separators</div>
-                <div>• Interactive flippable cards reveal detailed insights and statistics</div>
+                <div>• Click any analytics card to see detailed breakdown</div>
+                <div>• 3D flip animation reveals hidden insights and statistics</div>
+                <div>• Export format selected above will be used for downloads</div>
               </div>
             </div>
             
@@ -1590,44 +1634,14 @@ const BankStatementProcessor = () => {
               <h3 className="text-xl font-medium text-gray-800">
                 Categorized Transactions
               </h3>
-              <div className="flex items-center space-x-4">
-                {/* Export Options Toggle */}
-                <div className="bg-gray-50 rounded-lg p-3 border">
-                  <h4 className="text-sm font-medium text-gray-800 mb-3">Export Options</h4>
-                  <div className="space-y-2">
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="exportType"
-                        value="individual"
-                        checked={!consolidatedExport}
-                        onChange={() => setConsolidatedExport(false)}
-                        className="mr-2 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="text-sm text-gray-700">Individual Excel per document</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="exportType"
-                        value="consolidated"
-                        checked={consolidatedExport}
-                        onChange={() => setConsolidatedExport(true)}
-                        className="mr-2 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span className="text-sm text-gray-700">Single consolidated Excel with headers</span>
-                    </label>
-                  </div>
-                </div>
-                
-                <button
-                  onClick={generateExcel}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
-                >
-                  <Download className="h-5 w-5 mr-2" />
-                  Download {consolidatedExport ? 'Consolidated' : 'Individual'} Report
-                </button>
-              </div>
+              
+              <button
+                onClick={generateExcel}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors inline-flex items-center"
+              >
+                <Download className="h-5 w-5 mr-2" />
+                Download {consolidatedExport ? 'Consolidated' : 'Individual'} Report
+              </button>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
