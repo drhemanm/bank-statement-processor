@@ -881,17 +881,17 @@ const BankStatementProcessor = () => {
   }, [files, fileValidationResults, addLog, updateFileProgress, extractTextFromPDF, extractTransactionsFromText, statementMetadata, categorizeTransaction]);
 
   // SIMPLIFIED EXCEL GENERATION - Uses extracted utility
-  const generateExcel = useCallback(() => {
-    generateExcelReport(
-      results,
-      uncategorizedData,
-      fileStats,
-      exportMode,
-      documentCounters,
-      stats,
-      addLog
-    );
-  }, [results, uncategorizedData, fileStats, exportMode, documentCounters, addLog]);
+const generateExcel = useCallback(() => {
+  generateExcelReport(
+    results,
+    uncategorizedData,
+    fileStats,
+    exportMode,
+    documentCounters,
+    statementMetadata, // ADD THIS LINE
+    addLog
+  );
+}, [results, uncategorizedData, fileStats, exportMode, documentCounters, statementMetadata, addLog]);
 
   // Calculate stats for dashboard
   const getBalanceStats = useCallback(() => {
