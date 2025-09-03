@@ -17,8 +17,40 @@ module.exports = {
       animation: {
         'spin': 'spin 1s linear infinite',
         'pulse': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+      },
+      // Add support for 3D transforms used in flippable cards
+      transform: {
+        'rotate-y-180': 'rotateY(180deg)',
+      },
+      perspective: {
+        '1000': '1000px',
+      },
+      backfaceVisibility: {
+        'hidden': 'hidden',
+      },
+      transformStyle: {
+        'preserve-3d': 'preserve-3d',
       }
     },
   },
-  plugins: [],
+  plugins: [
+    // Add plugin for 3D transforms
+    function({ addUtilities }) {
+      const newUtilities = {
+        '.rotate-y-180': {
+          transform: 'rotateY(180deg)',
+        },
+        '.preserve-3d': {
+          transformStyle: 'preserve-3d',
+        },
+        '.backface-hidden': {
+          backfaceVisibility: 'hidden',
+        },
+        '.perspective-1000': {
+          perspective: '1000px',
+        },
+      }
+      addUtilities(newUtilities)
+    }
+  ],
 }
