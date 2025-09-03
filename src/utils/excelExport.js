@@ -1,4 +1,4 @@
-// Excel Export Utilities - Simplified Format for Client
+// Excel Export Utilities - Enhanced with Proper Balance Display
 
 const loadXLSX = () => {
   return new Promise((resolve) => {
@@ -20,7 +20,7 @@ export const generateExcelReport = async (
   fileStats, 
   exportMode, 
   documentCounters,
-  stats,
+  statementMetadata, // ADDED MISSING PARAMETER
   addLog
 ) => {
   if (!results) {
@@ -32,27 +32,38 @@ export const generateExcelReport = async (
   const timestamp = new Date().toLocaleDateString();
   
   if (exportMode === 'separate') {
-    // Generate separate Excel files for each document - SIMPLIFIED FORMAT
+    // Generate separate Excel files for each document - ENHANCED FORMAT
     Object.keys(fileStats).forEach(fileName => {
       const fileData = fileStats[fileName];
+      const metadata = statementMetadata[fileName] || {}; // GET METADATA FOR THIS FILE
+      
       if (fileData.status === 'success') {
         const wb = XLSX.utils.book_new();
         
-        // SIMPLE HEADER + TRANSACTION FORMAT (What client wants!)
+        // ENHANCED HEADER WITH PROPER BALANCE DISPLAY
         const worksheetData = [
-          // Header Information
-          ['BANK STATEMENT ANALYSIS'],
+          // Enhanced Header Information
+          ['BANK STATEMENT ANALYSIS - INDIVIDUAL DOCUMENT'],
           ['File Name:', fileName],
-          ['Statement Period:', fileData.statementPeriod || 'Not specified'],
-          ['Account Number:', fileData.accountNumber || 'Not specified'],
-          ['IBAN:', fileData.iban || 'Not specified'],
-          ['Currency:', fileData.currency || 'MUR'],
-          ['Opening Balance:', fileData.openingBalance.toLocaleString()],
-          ['Closing Balance:', fileData.closingBalance.toLocaleString()],
+          ['Statement Period:', metadata.statementPeriod || fileData.statementPeriod || 'Not specified'],
+          ['Account Number:', metadata.accountNumber || fileData.accountNumber || 'Not specified'],
+          ['IBAN:', metadata.iban || fileData.iban || 'Not specified'],
+          ['Currency:', metadata.currency || fileData.currency || 'MUR'],
+          [], // Empty row for balance section
+          ['BALANCE INFORMATION:'],
+          ['Opening Balance:', `${metadata.currency || 'MUR'} ${(metadata.openingBalance || 0).toLocaleString()}`],
+          ['Closing Balance:', `${metadata.currency || 'MUR'} ${(metadata.closingBalance || 0).toLocaleString()}`],
+          ['Net Change:', `${metadata.currency || 'MUR'} ${((metadata.closingBalance || 0) - (metadata.openingBalance || 0)).toLocaleString()}`],
+          [], // Empty row
+          ['TRANSACTION SUMMARY:'],
+          ['Total Transactions:', fileData.total || 0],
+          ['Categorized:', fileData.categorized || 0],
+          ['Uncategorized:', fileData.uncategorized || 0],
+          ['Success Rate:', `${fileData.total > 0 ? ((fileData.categorized / fileData.total) * 100).toFixed(1) : 0}%`],
           ['Generated on:', timestamp],
           [], // Empty row
           // Transaction Headers
-          ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Period', 'Type']
+          ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Period', 'Account', 'Type']
         ];
         
         // Add all transactions for this file - ONE ROW PER TRANSACTION
@@ -65,7 +76,8 @@ export const generateExcelReport = async (
               transaction.amount.toFixed(2),
               transaction.balance.toFixed(2),
               category,
-              transaction.statementPeriod || fileData.statementPeriod || 'Not specified',
+              transaction.statementPeriod || metadata.statementPeriod || 'Not specified',
+              transaction.accountNumber || metadata.accountNumber || 'Not specified',
               transaction.isDebit ? 'Debit' : 'Credit'
             ]);
           });
@@ -80,7 +92,8 @@ export const generateExcelReport = async (
             transaction.amount.toFixed(2),
             transaction.balance.toFixed(2),
             'UNCATEGORIZED',
-            transaction.statementPeriod || fileData.statementPeriod || 'Not specified',
+            transaction.statementPeriod || metadata.statementPeriod || 'Not specified',
+            transaction.accountNumber || metadata.accountNumber || 'Not specified',
             transaction.isDebit ? 'Debit' : 'Credit'
           ]);
         });
@@ -97,35 +110,53 @@ export const generateExcelReport = async (
     addLog(`${Object.keys(fileStats).length} Excel files downloaded successfully!`, 'success');
     
   } else {
-    // Generate combined Excel file - SIMPLIFIED FORMAT
+    // Generate combined Excel file - ENHANCED FORMAT
     const wb = XLSX.utils.book_new();
     
+    // Calculate totals from metadata
+    const totalOpeningBalance = Object.values(statementMetadata).reduce((sum, meta) => sum + (meta.openingBalance || 0), 0);
+    const totalClosingBalance = Object.values(statementMetadata).reduce((sum, meta) => sum + (meta.closingBalance || 0), 0);
+    const totalNetChange = totalClosingBalance - totalOpeningBalance;
+    
     const worksheetData = [
-      // Combined Header Information
-      ['CONSOLIDATED BANK STATEMENT ANALYSIS'],
+      // Enhanced Combined Header Information
+      ['CONSOLIDATED BANK STATEMENT ANALYSIS - MULTIPLE DOCUMENTS'],
       ['Generated on:', timestamp],
       ['Documents Processed:', Object.keys(fileStats).length],
-      ['Total Transactions:', stats.totalTransactions],
+      ['Total Transactions:', Object.values(fileStats).reduce((sum, stats) => sum + (stats.total || 0), 0)],
       [], // Empty row
-      // Document Summary
-      ['DOCUMENT SUMMARY:']
+      ['CONSOLIDATED BALANCE SUMMARY:'],
+      ['Total Opening Balance:', `MUR ${totalOpeningBalance.toLocaleString()}`],
+      ['Total Closing Balance:', `MUR ${totalClosingBalance.toLocaleString()}`],
+      ['Net Change Across All Documents:', `MUR ${totalNetChange.toLocaleString()}`],
+      [], // Empty row
+      ['INDIVIDUAL DOCUMENT SUMMARY:']
     ];
     
-    // Add each file's summary
+    // Add each file's summary with enhanced balance information
     Object.entries(fileStats).forEach(([fileName, fileData]) => {
+      const metadata = statementMetadata[fileName] || {};
+      
       if (fileData.status === 'success') {
+        const docOpeningBalance = metadata.openingBalance || 0;
+        const docClosingBalance = metadata.closingBalance || 0;
+        const docNetChange = docClosingBalance - docOpeningBalance;
+        
         worksheetData.push([
           'File:', fileName,
-          'Period:', fileData.statementPeriod || 'Not specified',
-          'Account:', fileData.accountNumber || 'Not specified',
-          'Transactions:', fileData.total
+          'Period:', metadata.statementPeriod || 'Not specified',
+          'Account:', metadata.accountNumber || 'Not specified',
+          'Opening Balance:', `MUR ${docOpeningBalance.toLocaleString()}`,
+          'Closing Balance:', `MUR ${docClosingBalance.toLocaleString()}`,
+          'Net Change:', `MUR ${docNetChange.toLocaleString()}`,
+          'Transactions:', fileData.total || 0
         ]);
       }
     });
     
     worksheetData.push([]); // Empty row
-    worksheetData.push(['ALL TRANSACTIONS:']);
-    worksheetData.push(['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Period', 'Source File', 'Type']);
+    worksheetData.push(['ALL TRANSACTIONS FROM ALL DOCUMENTS:']);
+    worksheetData.push(['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Period', 'Source File', 'Account', 'Type']);
     
     // Add ALL transactions - ONE ROW PER TRANSACTION
     Object.entries(results).forEach(([category, transactions]) => {
@@ -139,6 +170,7 @@ export const generateExcelReport = async (
           category,
           transaction.statementPeriod || 'Not specified',
           transaction.sourceFile,
+          transaction.accountNumber || 'Not specified',
           transaction.isDebit ? 'Debit' : 'Credit'
         ]);
       });
@@ -155,6 +187,7 @@ export const generateExcelReport = async (
         'UNCATEGORIZED',
         transaction.statementPeriod || 'Not specified',
         transaction.sourceFile,
+        transaction.accountNumber || 'Not specified',
         transaction.isDebit ? 'Debit' : 'Credit'
       ]);
     });
