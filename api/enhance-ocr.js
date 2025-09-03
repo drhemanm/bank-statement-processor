@@ -12,10 +12,12 @@ export default async function handler(req, res) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // Updated to use proper header name
           "x-api-key": process.env.ANTHROPIC_API_KEY,
         },
         body: JSON.stringify({
-          model: "claude-3-sonnet-20240229",
+          // Updated to latest model
+          model: "claude-sonnet-4-20250514",
           max_tokens: 4000,
           messages: [
             { 
@@ -39,6 +41,10 @@ export default async function handler(req, res) {
         })
       });
 
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+
       const data = await response.json();
       const ocrText = data.content[0].text;
       
@@ -53,7 +59,7 @@ export default async function handler(req, res) {
           "x-api-key": process.env.ANTHROPIC_API_KEY,
         },
         body: JSON.stringify({
-          model: "claude-3-sonnet-20240229",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 4000,
           messages: [
             { 
@@ -68,6 +74,10 @@ Return the cleaned text maintaining the original bank statement structure.`
         })
       });
 
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+      }
+
       const data = await response.json();
       const enhancedText = data.content[0].text;
       
@@ -75,7 +85,11 @@ Return the cleaned text maintaining the original bank statement structure.`
     }
     
   } catch (error) {
-    console.log('Error:', error);
-    res.status(500).json({ error: 'Enhancement failed' });
+    console.error('Enhancement error:', error);
+    res.status(500).json({ 
+      error: 'Enhancement failed',
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 }
