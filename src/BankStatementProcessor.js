@@ -1,5 +1,7 @@
 import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, TrendingUp, RotateCcw, Files, X, AlertTriangle, Settings, FileOutput, FilePlus } from 'lucide-react';
+import FlippableCard from './components/FlippableCard';
+import { generateExcelReport } from './utils/excelExport';
 
 const BankStatementProcessor = () => {
   // Core state management with better initial values
@@ -184,6 +186,7 @@ const BankStatementProcessor = () => {
     const validFiles = files.filter(file => fileValidationResults[file.name]?.isValid);
     return validFiles.length > 0 && !processing;
   }, [files, fileValidationResults, processing]);
+
   // ENHANCED METADATA EXTRACTION - Extracts opening/closing balance and statement period
   const extractStatementMetadata = useCallback((text, fileName) => {
     const metadata = {
@@ -557,6 +560,7 @@ const BankStatementProcessor = () => {
     
     return { category: 'UNCATEGORIZED', matched: false, keyword: null, confidence: 'none' };
   }, [mappingRules]);
+
   // Enhanced file upload with mode-specific logic
   const handleFileUpload = useCallback(async (event) => {
     try {
@@ -876,296 +880,18 @@ const BankStatementProcessor = () => {
     }
   }, [files, fileValidationResults, addLog, updateFileProgress, extractTextFromPDF, extractTransactionsFromText, statementMetadata, categorizeTransaction]);
 
-  // ENHANCED EXCEL GENERATION - Supports both separate and combined export modes
+  // SIMPLIFIED EXCEL GENERATION - Uses extracted utility
   const generateExcel = useCallback(() => {
-    if (!results) {
-      addLog('No results to download', 'error');
-      return;
-    }
-
-    const loadXLSX = () => {
-      return new Promise((resolve) => {
-        if (window.XLSX) {
-          resolve(window.XLSX);
-          return;
-        }
-        
-        const script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-        script.onload = () => resolve(window.XLSX);
-        document.head.appendChild(script);
-      });
-    };
-    
-    loadXLSX().then(XLSX => {
-      const timestamp = new Date().toLocaleString();
-      
-      if (exportMode === 'separate') {
-        // Generate separate Excel files for each document
-        Object.keys(fileStats).forEach(fileName => {
-          const fileData = fileStats[fileName];
-          if (fileData.status === 'success') {
-            const wb = XLSX.utils.book_new();
-            
-            // File-specific summary
-            const summaryData = [
-              [`BANK STATEMENT ANALYSIS REPORT - ${fileName}`],
-              ['Generated:', timestamp],
-              [''],
-              ['DOCUMENT INFORMATION'],
-              ['File Name:', fileName],
-              ['Statement Period:', fileData.statementPeriod],
-              ['Account Number:', fileData.accountNumber],
-              ['IBAN:', fileData.iban || 'N/A'],
-              ['Currency:', fileData.currency],
-              ['Opening Balance:', `${fileData.currency} ${fileData.openingBalance.toLocaleString()}`],
-              ['Closing Balance:', `${fileData.currency} ${fileData.closingBalance.toLocaleString()}`],
-              [''],
-              ['TRANSACTION SUMMARY'],
-              ['Total Transactions:', fileData.total],
-              ['Categorized:', fileData.categorized],
-              ['Uncategorized:', fileData.uncategorized],
-              ['']
-            ];
-            
-            const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
-            XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
-            
-            // Transactions for this file
-            const fileTransactions = [
-              ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Currency', 'Type']
-            ];
-            
-            // Add categorized transactions
-            Object.entries(results).forEach(([category, transactions]) => {
-              transactions.filter(t => t.sourceFile === fileName).forEach(transaction => {
-                fileTransactions.push([
-                  transaction.transactionDate,
-                  transaction.valueDate,
-                  transaction.description,
-                  transaction.amount.toFixed(2),
-                  transaction.balance.toFixed(2),
-                  category,
-                  transaction.currency,
-                  transaction.isDebit ? 'Debit' : 'Credit'
-                ]);
-              });
-            });
-            
-            // Add uncategorized transactions
-            uncategorizedData.filter(t => t.sourceFile === fileName).forEach(transaction => {
-              fileTransactions.push([
-                transaction.transactionDate,
-                transaction.valueDate,
-                transaction.description,
-                transaction.amount.toFixed(2),
-                transaction.balance.toFixed(2),
-                'UNCATEGORIZED',
-                transaction.currency,
-                transaction.isDebit ? 'Debit' : 'Credit'
-              ]);
-            });
-            
-            const transactionWS = XLSX.utils.aoa_to_sheet(fileTransactions);
-            XLSX.utils.book_append_sheet(wb, transactionWS, "Transactions");
-            
-            // Download file
-            const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-            const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            const cleanFileName = fileName.replace(/\.[^/.]+$/, "");
-            a.download = `${cleanFileName}_Analysis_${new Date().toISOString().split('T')[0]}.xlsx`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-          }
-        });
-        
-        addLog(`${Object.keys(fileStats).length} separate Excel files downloaded successfully!`, 'success');
-        
-      } else {
-        // Generate combined Excel file
-        const wb = XLSX.utils.book_new();
-        
-        // Combined summary with all file information
-        const summaryData = [
-          ['CONSOLIDATED BANK STATEMENT ANALYSIS REPORT'],
-          ['Generated:', timestamp],
-          ['Export Mode:', 'Combined'],
-          [''],
-          ['PROCESSING SUMMARY'],
-          ['Documents Uploaded:', documentCounters.totalUploaded],
-          ['Documents Validated:', documentCounters.totalValidated],
-          ['Documents Processed:', documentCounters.totalProcessed],
-          ['Documents Failed:', documentCounters.totalFailed],
-          [''],
-          ['DOCUMENT DETAILS']
-        ];
-        
-        // Add each file's metadata
-        Object.entries(fileStats).forEach(([fileName, fileData]) => {
-          if (fileData.status === 'success') {
-            summaryData.push([
-              'File:', fileName,
-              'Period:', fileData.statementPeriod,
-              'Account:', fileData.accountNumber,
-              'Opening:', `${fileData.currency} ${fileData.openingBalance.toLocaleString()}`,
-              'Closing:', `${fileData.currency} ${fileData.closingBalance.toLocaleString()}`
-            ]);
-          }
-        });
-        
-        summaryData.push(['']);
-        summaryData.push(['SUMMARY BY CATEGORY']);
-        summaryData.push(['Category', 'Count', 'Total Amount (MUR)', 'Avg Amount (MUR)']);
-        
-        Object.entries(results).forEach(([category, transactions]) => {
-          if (transactions.length > 0) {
-            const total = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-            const avg = total / transactions.length;
-            summaryData.push([category, transactions.length, total.toFixed(2), avg.toFixed(2)]);
-          }
-        });
-        
-        const summaryWS = XLSX.utils.aoa_to_sheet(summaryData);
-        XLSX.utils.book_append_sheet(wb, summaryWS, "Summary");
-        
-        // All transactions combined
-        const allTransactionData = [
-          ['Date', 'Value Date', 'Description', 'Amount (MUR)', 'Balance', 'Category', 'Source File', 'Account Number', 'Currency', 'Type']
-        ];
-        
-        Object.entries(results).forEach(([category, transactions]) => {
-          transactions.forEach(transaction => {
-            allTransactionData.push([
-              transaction.transactionDate,
-              transaction.valueDate,
-              transaction.description,
-              transaction.amount.toFixed(2),
-              transaction.balance.toFixed(2),
-              category,
-              transaction.sourceFile,
-              transaction.accountNumber || 'N/A',
-              transaction.currency || 'MUR',
-              transaction.isDebit ? 'Debit' : 'Credit'
-            ]);
-          });
-        });
-        
-        uncategorizedData.forEach(transaction => {
-          allTransactionData.push([
-            transaction.transactionDate,
-            transaction.valueDate,
-            transaction.description,
-            transaction.amount.toFixed(2),
-            transaction.balance.toFixed(2),
-            'UNCATEGORIZED',
-            transaction.sourceFile,
-            transaction.accountNumber || 'N/A',
-            transaction.currency || 'MUR',
-            transaction.isDebit ? 'Debit' : 'Credit'
-          ]);
-        });
-        
-        const transactionWS = XLSX.utils.aoa_to_sheet(allTransactionData);
-        XLSX.utils.book_append_sheet(wb, transactionWS, "All Transactions");
-        
-        const excelBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-        const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `Combined_Bank_Statement_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        
-        URL.revokeObjectURL(url);
-        addLog('Combined Excel report downloaded successfully!', 'success');
-      }
-    });
-  }, [results, uncategorizedData, fileStats, exportMode, documentCounters, addLog]);
-  // Flippable Card Component with improved styling
-  const FlippableCard = ({ cardId, icon: Icon, frontTitle, frontValue, frontSubtitle, backContent, color = 'blue' }) => {
-    const isFlipped = flippedCards[cardId];
-    
-    const colorClasses = {
-      blue: 'text-blue-600',
-      green: 'text-green-600',
-      yellow: 'text-yellow-600',
-      red: 'text-red-600',
-      purple: 'text-purple-600',
-      indigo: 'text-indigo-600'
-    };
-
-    const iconColorClasses = {
-      blue: 'text-blue-500',
-      green: 'text-green-500',
-      yellow: 'text-yellow-500',
-      red: 'text-red-500',
-      purple: 'text-purple-500',
-      indigo: 'text-indigo-500'
-    };
-    
-    return (
-      <div 
-        className="relative w-full h-40 cursor-pointer group"
-        style={{ perspective: '1000px' }}
-        onClick={() => toggleCardFlip(cardId)}
-      >
-        <div 
-          className={`absolute inset-0 w-full h-full transition-transform duration-700 ${
-            isFlipped ? 'rotate-y-180' : ''
-          }`}
-          style={{ transformStyle: 'preserve-3d' }}
-        >
-          {/* Front of card */}
-          <div 
-            className="absolute inset-0 w-full h-full bg-white rounded-lg p-4 shadow-sm border flex items-center hover:shadow-md transition-shadow"
-            style={{ backfaceVisibility: 'hidden' }}
-          >
-            <Icon className={`h-8 w-8 ${iconColorClasses[color]} mr-3 flex-shrink-0`} />
-            <div className="flex-1 min-w-0">
-              <div className={`text-2xl font-bold ${colorClasses[color]} truncate`}>{frontValue}</div>
-              <div className="text-sm text-gray-600 truncate">{frontSubtitle}</div>
-            </div>
-            <RotateCcw className="h-4 w-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-          </div>
-          
-          {/* Back of card */}
-          <div 
-            className="absolute inset-0 w-full h-full bg-white rounded-lg p-4 shadow-sm border"
-            style={{ 
-              backfaceVisibility: 'hidden',
-              transform: 'rotateY(180deg)'
-            }}
-          >
-            <div className="h-full flex flex-col">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium text-gray-800 text-sm">{frontTitle} Details</h4>
-                <RotateCcw className="h-4 w-4 text-gray-400" />
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                <div className="space-y-1 text-xs">
-                  {backContent.map((item, index) => (
-                    <div key={index} className="flex justify-between items-center">
-                      <span className="text-gray-600">{item.label}</span>
-                      <span className={`font-medium ${item.color || 'text-gray-800'}`}>
-                        {item.value}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+    generateExcelReport(
+      results,
+      uncategorizedData,
+      fileStats,
+      exportMode,
+      documentCounters,
+      stats,
+      addLog
     );
-  };
+  }, [results, uncategorizedData, fileStats, exportMode, documentCounters, addLog]);
 
   // Calculate stats for dashboard
   const getBalanceStats = useCallback(() => {
@@ -1361,6 +1087,8 @@ const BankStatementProcessor = () => {
           frontValue={documentCounters.totalUploaded.toString()}
           frontSubtitle="Files uploaded"
           color="blue"
+          isFlipped={flippedCards["uploaded"]}
+          onToggleFlip={toggleCardFlip}
           backContent={[
             { label: "Current Batch", value: documentCounters.currentBatch.toString() },
             { label: "Mode", value: uploadMode === 'single' ? 'Single' : 'Multiple', color: "text-blue-600" },
@@ -1375,6 +1103,8 @@ const BankStatementProcessor = () => {
           frontValue={documentCounters.totalValidated.toString()}
           frontSubtitle="Passed validation"
           color="green"
+          isFlipped={flippedCards["validated"]}
+          onToggleFlip={toggleCardFlip}
           backContent={[
             { label: "Validation Rate", value: documentCounters.totalUploaded > 0 ? `${((documentCounters.totalValidated / documentCounters.totalUploaded) * 100).toFixed(1)}%` : "0%", color: "text-green-600" },
             { label: "Failed Validation", value: (documentCounters.totalUploaded - documentCounters.totalValidated).toString(), color: "text-red-500" },
@@ -1389,6 +1119,8 @@ const BankStatementProcessor = () => {
           frontValue={documentCounters.totalProcessed.toString()}
           frontSubtitle="Successfully processed"
           color="purple"
+          isFlipped={flippedCards["processed"]}
+          onToggleFlip={toggleCardFlip}
           backContent={[
             { label: "Success Rate", value: documentCounters.totalValidated > 0 ? `${((documentCounters.totalProcessed / documentCounters.totalValidated) * 100).toFixed(1)}%` : "0%", color: "text-purple-600" },
             { label: "Remaining", value: Math.max(0, documentCounters.totalValidated - documentCounters.totalProcessed).toString(), color: "text-yellow-600" },
@@ -1403,6 +1135,8 @@ const BankStatementProcessor = () => {
           frontValue={documentCounters.totalFailed.toString()}
           frontSubtitle="Processing failures"
           color="red"
+          isFlipped={flippedCards["failed"]}
+          onToggleFlip={toggleCardFlip}
           backContent={[
             { label: "Failure Rate", value: documentCounters.totalUploaded > 0 ? `${((documentCounters.totalFailed / documentCounters.totalUploaded) * 100).toFixed(1)}%` : "0%", color: "text-red-600" },
             { label: "Validation Fails", value: (documentCounters.totalUploaded - documentCounters.totalValidated).toString(), color: "text-orange-500" },
@@ -1417,6 +1151,8 @@ const BankStatementProcessor = () => {
           frontValue={documentCounters.lifetimeProcessed.toString()}
           frontSubtitle="Total processed this session"
           color="yellow"
+          isFlipped={flippedCards["lifetime"]}
+          onToggleFlip={toggleCardFlip}
           backContent={[
             { label: "All Time High", value: documentCounters.lifetimeProcessed.toString(), color: "text-yellow-600" },
             { label: "Current Batch", value: documentCounters.totalProcessed.toString(), color: "text-purple-600" },
@@ -1431,6 +1167,8 @@ const BankStatementProcessor = () => {
           frontValue={stats.totalTransactions.toString()}
           frontSubtitle="Total transactions found"
           color="indigo"
+          isFlipped={flippedCards["transactions"]}
+          onToggleFlip={toggleCardFlip}
           backContent={[
             { label: "Categorized", value: stats.categorizedCount.toString(), color: "text-green-600" },
             { label: "Uncategorized", value: stats.uncategorizedCount.toString(), color: "text-red-600" },
