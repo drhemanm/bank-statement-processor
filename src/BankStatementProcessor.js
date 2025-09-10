@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, TrendingUp, RotateCcw, Files, X, AlertTriangle, Settings, FileOutput, FilePlus } from 'lucide-react';
 import FlippableCard from './components/FlippableCard';
+import SimpleGroupingControls from './components/SimpleGroupingControls';
 import { generateExcelReport } from './utils/excelExport';
 
 const BankStatementProcessor = () => {
@@ -880,18 +881,43 @@ const BankStatementProcessor = () => {
     }
   }, [files, fileValidationResults, addLog, updateFileProgress, extractTextFromPDF, extractTransactionsFromText, statementMetadata, categorizeTransaction]);
 
-  // SIMPLIFIED EXCEL GENERATION - Uses extracted utility
-const generateExcel = useCallback(() => {
-  generateExcelReport(
-    results,
-    uncategorizedData,
-    fileStats,
-    exportMode,
-    documentCounters,
-    statementMetadata, // ADD THIS LINE
-    addLog
-  );
-}, [results, uncategorizedData, fileStats, exportMode, documentCounters, statementMetadata, addLog]);
+  // NEW: Enhanced export handler for simple grouping
+  const handleExportWithGrouping = useCallback((groupingConfig) => {
+    if (!results) {
+      addLog('No results to export', 'error');
+      return;
+    }
+
+    if (groupingConfig.enabled) {
+      addLog(`Starting export with ${groupingConfig.type} grouping...`, 'info');
+    } else {
+      addLog('Starting standard export (no grouping)...', 'info');
+    }
+
+    generateExcelReport(
+      results,
+      uncategorizedData,
+      fileStats,
+      exportMode,
+      documentCounters,
+      statementMetadata,
+      addLog,
+      groupingConfig // Pass the grouping configuration
+    );
+  }, [results, uncategorizedData, fileStats, exportMode, documentCounters, statementMetadata, addLog]);
+
+  // Original Excel generation (kept for backward compatibility)
+  const generateExcel = useCallback(() => {
+    generateExcelReport(
+      results,
+      uncategorizedData,
+      fileStats,
+      exportMode,
+      documentCounters,
+      statementMetadata,
+      addLog
+    );
+  }, [results, uncategorizedData, fileStats, exportMode, documentCounters, statementMetadata, addLog]);
 
   // Calculate stats for dashboard
   const getBalanceStats = useCallback(() => {
@@ -1378,16 +1404,6 @@ const generateExcel = useCallback(() => {
             <RotateCcw className="h-4 w-4" />
             <span>Reset</span>
           </button>
-          
-          {results && (
-            <button
-              onClick={generateExcel}
-              className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
-            >
-              <Download className="h-4 w-4" />
-              <span>Download Excel ({exportMode === 'separate' ? 'Separate Files' : 'Combined File'})</span>
-            </button>
-          )}
 
           {!canProcess && files.length > 0 && (
             <div className="text-sm text-yellow-600 bg-yellow-50 px-3 py-2 rounded-lg">
@@ -1413,8 +1429,19 @@ const generateExcel = useCallback(() => {
               </div>
             </div>
           </div>
-        )}
+		  )}
       </div>
+
+      {/* NEW: Simple Grouping Export Controls - Replaces old export section */}
+      {results && (
+        <SimpleGroupingControls
+          onExportWithGrouping={handleExportWithGrouping}
+          processing={processing}
+          exportMode={exportMode}
+          hasResults={!!results}
+          transactionCount={stats.totalTransactions}
+        />
+      )}
 
       {/* Enhanced Results Display */}
       {results && (
@@ -1561,3 +1588,4 @@ const generateExcel = useCallback(() => {
 };
 
 export default BankStatementProcessor;
+		  
