@@ -1,4 +1,4 @@
-// Excel Export Utilities - Enhanced with Simple User-Controlled Grouping
+// Excel Export Utilities - Enhanced with Separate Sheets per Document
 
 const loadXLSX = () => {
   return new Promise((resolve) => {
@@ -136,7 +136,7 @@ export const generateExcelReport = async (
   documentCounters,
   statementMetadata,
   addLog,
-  groupingConfig = null // NEW: Added grouping configuration parameter
+  groupingConfig = null
 ) => {
   if (!results) {
     addLog('No results to download', 'error');
@@ -238,7 +238,7 @@ export const generateExcelReport = async (
     addLog(`${Object.keys(fileStats).length} Excel files downloaded successfully${groupingText}!`, 'success');
     
   } else {
-    // Generate combined Excel file with optional grouping
+    // ENHANCED COMBINED MODE - Each document gets its own sheet
     const wb = XLSX.utils.book_new();
     
     // Calculate totals from metadata
@@ -246,35 +246,8 @@ export const generateExcelReport = async (
     const totalClosingBalance = Object.values(statementMetadata).reduce((sum, meta) => sum + (meta.closingBalance || 0), 0);
     const totalNetChange = totalClosingBalance - totalOpeningBalance;
     
-    // Combine all transactions
-    const allTransactions = [];
-    Object.entries(results).forEach(([category, transactions]) => {
-      transactions.forEach(transaction => {
-        allTransactions.push({ ...transaction, category });
-      });
-    });
-    
-    // Add uncategorized transactions
-    uncategorizedData.forEach(transaction => {
-      allTransactions.push({ ...transaction, category: 'UNCATEGORIZED' });
-    });
-    
-    // NEW: Apply user-selected grouping if enabled
-    let groupedData = null;
-    if (groupingConfig && groupingConfig.enabled) {
-      addLog(`Applying ${groupingConfig.type} grouping as requested by user...`, 'info');
-      
-      if (groupingConfig.type === 'description') {
-        groupedData = groupTransactionsByDescription(allTransactions);
-        addLog(`Created ${Object.keys(groupedData).length} description-based groups`, 'success');
-      } else if (groupingConfig.type === 'date') {
-        groupedData = groupTransactionsByDate(allTransactions);
-        addLog(`Created ${Object.keys(groupedData).length} date-based groups`, 'success');
-      }
-    }
-    
-    const worksheetData = [
-      // Enhanced Combined Header Information
+    // CREATE SUMMARY SHEET FIRST
+    const summaryData = [
       ['CONSOLIDATED BANK STATEMENT ANALYSIS - MULTIPLE DOCUMENTS'],
       ['Generated on:', timestamp],
       ['Documents Processed:', Object.keys(fileStats).length],
@@ -285,68 +258,193 @@ export const generateExcelReport = async (
       ['Total Closing Balance:', `MUR ${totalClosingBalance.toLocaleString()}`],
       ['Net Change Across All Documents:', `MUR ${totalNetChange.toLocaleString()}`],
       [], // Empty row
-      ['INDIVIDUAL DOCUMENT SUMMARY:']
+      ['INDIVIDUAL DOCUMENT SUMMARY:'],
+      ['File Name', 'Period', 'Account Number', 'Opening Balance', 'Closing Balance', 'Net Change', 'Transactions', 'Sheet Name']
     ];
     
-    // Add each file's summary with enhanced balance information
-    Object.entries(fileStats).forEach(([fileName, fileData]) => {
+    // Add each file's summary
+    Object.entries(fileStats).forEach(([fileName, fileData], index) => {
       const metadata = statementMetadata[fileName] || {};
       
       if (fileData.status === 'success') {
         const docOpeningBalance = metadata.openingBalance || 0;
         const docClosingBalance = metadata.closingBalance || 0;
         const docNetChange = docClosingBalance - docOpeningBalance;
+        const sheetName = `Document ${index + 1}`;
         
-        worksheetData.push([
-          'File:', fileName,
-          'Period:', metadata.statementPeriod || 'Not specified',
-          'Account:', metadata.accountNumber || 'Not specified',
-          'Opening Balance:', `MUR ${docOpeningBalance.toLocaleString()}`,
-          'Closing Balance:', `MUR ${docClosingBalance.toLocaleString()}`,
-          'Net Change:', `MUR ${docNetChange.toLocaleString()}`,
-          'Transactions:', fileData.total || 0
+        summaryData.push([
+          fileName,
+          metadata.statementPeriod || 'Not specified',
+          metadata.accountNumber || 'Not specified',
+          `MUR ${docOpeningBalance.toLocaleString()}`,
+          `MUR ${docClosingBalance.toLocaleString()}`,
+          `MUR ${docNetChange.toLocaleString()}`,
+          fileData.total || 0,
+          sheetName
         ]);
       }
     });
     
-    worksheetData.push([]); // Empty row
-    worksheetData.push(['ALL TRANSACTIONS FROM ALL DOCUMENTS (ORIGINAL PDF ORDER):']);
-    worksheetData.push(['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Period', 'Source File', 'Account', 'Type']);
+    summaryData.push([]);
+    summaryData.push(['NAVIGATION GUIDE:']);
+    summaryData.push(['• Summary Sheet: This overview sheet']);
+    summaryData.push(['• Document Sheets: Individual sheets for each bank statement']);
+    summaryData.push(['• All Transactions: Consolidated view of all transactions']);
+    summaryData.push(['• Use the sheet tabs at the bottom to navigate between sheets']);
     
-    // Add ALL transactions - MAINTAIN ORIGINAL PDF ORDER
+    // Create and add summary worksheet
+    const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryData);
+    XLSX.utils.book_append_sheet(wb, summaryWorksheet, "Summary");
+    
+    // CREATE SEPARATE SHEET FOR EACH DOCUMENT
+    let documentIndex = 0;
+    Object.entries(fileStats).forEach(([fileName, fileData]) => {
+      const metadata = statementMetadata[fileName] || {};
+      
+      if (fileData.status === 'success') {
+        documentIndex++;
+        
+        // Get transactions for this specific file
+        const fileTransactions = [];
+        Object.entries(results).forEach(([category, transactions]) => {
+          transactions.filter(t => t.sourceFile === fileName).forEach(transaction => {
+            fileTransactions.push({ ...transaction, category });
+          });
+        });
+        
+        // Add uncategorized transactions for this file
+        uncategorizedData.filter(t => t.sourceFile === fileName).forEach(transaction => {
+          fileTransactions.push({ ...transaction, category: 'UNCATEGORIZED' });
+        });
+        
+        // Create worksheet data for this document
+        const worksheetData = [
+          [`DOCUMENT ${documentIndex}: ${fileName}`],
+          ['Statement Period:', metadata.statementPeriod || 'Not specified'],
+          ['Account Number:', metadata.accountNumber || 'Not specified'],
+          ['IBAN:', metadata.iban || 'Not specified'],
+          ['Currency:', metadata.currency || 'MUR'],
+          [], // Empty row
+          ['BALANCE INFORMATION:'],
+          ['Opening Balance:', `${metadata.currency || 'MUR'} ${(metadata.openingBalance || 0).toLocaleString()}`],
+          ['Closing Balance:', `${metadata.currency || 'MUR'} ${(metadata.closingBalance || 0).toLocaleString()}`],
+          ['Net Change:', `${metadata.currency || 'MUR'} ${((metadata.closingBalance || 0) - (metadata.openingBalance || 0)).toLocaleString()}`],
+          [], // Empty row
+          ['TRANSACTION SUMMARY:'],
+          ['Total Transactions:', fileData.total || 0],
+          ['Categorized:', fileData.categorized || 0],
+          ['Uncategorized:', fileData.uncategorized || 0],
+          ['Success Rate:', `${fileData.total > 0 ? ((fileData.categorized / fileData.total) * 100).toFixed(1) : 0}%`],
+          [], // Empty row
+          ['DETAILED TRANSACTIONS:'],
+          ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Type']
+        ];
+        
+        // Add transactions for this file
+        fileTransactions.forEach(transaction => {
+          worksheetData.push([
+            transaction.transactionDate,
+            transaction.valueDate,
+            transaction.description,
+            transaction.amount.toFixed(2),
+            transaction.balance.toFixed(2),
+            transaction.category,
+            transaction.isDebit ? 'Debit' : 'Credit'
+          ]);
+        });
+        
+        // Create worksheet for this document
+        const docWorksheet = XLSX.utils.aoa_to_sheet(worksheetData);
+        const sheetName = `Document ${documentIndex}`;
+        
+        XLSX.utils.book_append_sheet(wb, docWorksheet, sheetName);
+        
+        // Add grouped worksheet if grouping is enabled for this document
+        if (groupingConfig && groupingConfig.enabled && fileTransactions.length > 0) {
+          let groupedData = null;
+          
+          if (groupingConfig.type === 'description') {
+            groupedData = groupTransactionsByDescription(fileTransactions);
+          } else if (groupingConfig.type === 'date') {
+            groupedData = groupTransactionsByDate(fileTransactions);
+          }
+          
+          if (groupedData) {
+            const groupedWorksheet = createGroupedWorksheet(XLSX, groupedData, groupingConfig.type, metadata);
+            const groupedSheetName = `Doc${documentIndex}_Grouped`;
+            XLSX.utils.book_append_sheet(wb, groupedWorksheet, groupedSheetName);
+          }
+        }
+      }
+    });
+    
+    // CREATE CONSOLIDATED TRANSACTION SHEET (ALL TRANSACTIONS TOGETHER)
+    const allTransactions = [];
+    Object.entries(results).forEach(([category, transactions]) => {
+      transactions.forEach(transaction => {
+        allTransactions.push({ ...transaction, category });
+      });
+    });
+    
+    uncategorizedData.forEach(transaction => {
+      allTransactions.push({ ...transaction, category: 'UNCATEGORIZED' });
+    });
+    
+    const consolidatedData = [
+      ['ALL TRANSACTIONS FROM ALL DOCUMENTS (CONSOLIDATED VIEW)'],
+      ['Generated on:', timestamp],
+      ['Total Documents:', Object.keys(fileStats).length],
+      ['Total Transactions:', allTransactions.length],
+      [], // Empty row
+      ['Note: This sheet contains all transactions from all documents combined.'],
+      ['Use the individual document sheets for detailed analysis of specific statements.'],
+      [], // Empty row
+      ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Source File', 'Account', 'Type']
+    ];
+    
     allTransactions.forEach(transaction => {
-      worksheetData.push([
+      consolidatedData.push([
         transaction.transactionDate,
         transaction.valueDate,
         transaction.description,
         transaction.amount.toFixed(2),
         transaction.balance.toFixed(2),
         transaction.category,
-        transaction.statementPeriod || 'Not specified',
         transaction.sourceFile,
         transaction.accountNumber || 'Not specified',
         transaction.isDebit ? 'Debit' : 'Credit'
       ]);
     });
     
-    // Create main worksheet
-    const detailsWorksheet = XLSX.utils.aoa_to_sheet(worksheetData);
-    XLSX.utils.book_append_sheet(wb, detailsWorksheet, "All Transactions");
+    const consolidatedWorksheet = XLSX.utils.aoa_to_sheet(consolidatedData);
+    XLSX.utils.book_append_sheet(wb, consolidatedWorksheet, "All Transactions");
     
-    // NEW: Add grouped worksheet if grouping is enabled
-    if (groupedData) {
-      const groupedWorksheet = createGroupedWorksheet(XLSX, groupedData, groupingConfig.type, statementMetadata);
-      const sheetName = groupingConfig.type === 'description' ? 'Grouped by Description' : 'Grouped by Date';
-      XLSX.utils.book_append_sheet(wb, groupedWorksheet, sheetName);
+    // Add overall grouped worksheet if grouping is enabled
+    if (groupingConfig && groupingConfig.enabled) {
+      let groupedData = null;
       
-      addLog(`Added ${sheetName} worksheet to Excel file`, 'success');
+      if (groupingConfig.type === 'description') {
+        groupedData = groupTransactionsByDescription(allTransactions);
+      } else if (groupingConfig.type === 'date') {
+        groupedData = groupTransactionsByDate(allTransactions);
+      }
+      
+      if (groupedData) {
+        const groupedWorksheet = createGroupedWorksheet(XLSX, groupedData, groupingConfig.type, statementMetadata);
+        const sheetName = groupingConfig.type === 'description' ? 'All_Grouped_Desc' : 'All_Grouped_Date';
+        XLSX.utils.book_append_sheet(wb, groupedWorksheet, sheetName);
+      }
     }
     
+    // Download the combined workbook
     const groupingText = groupingConfig?.enabled ? `_with_${groupingConfig.type}_grouping` : '';
-    downloadExcelFile(wb, `Combined_Bank_Statements_${timestamp.replace(/\//g, '-')}${groupingText}.xlsx`);
+    const fileName = `Combined_Bank_Statements_${timestamp.replace(/\//g, '-')}${groupingText}.xlsx`;
+    downloadExcelFile(wb, fileName);
     
     const groupingMsg = groupingConfig?.enabled ? ` with ${groupingConfig.type} grouping` : '';
-    addLog(`Combined Excel file${groupingMsg} downloaded successfully!`, 'success');
+    const successfulDocs = Object.keys(fileStats).filter(f => fileStats[f].status === 'success').length;
+    const totalSheets = 2 + successfulDocs + (groupingConfig?.enabled ? successfulDocs + 1 : 0); // Summary + Documents + All Transactions + Grouped sheets
+    addLog(`Combined Excel file created with ${totalSheets} sheets: Summary + ${successfulDocs} Document sheets + Consolidated view${groupingMsg}`, 'success');
   }
 };
 
