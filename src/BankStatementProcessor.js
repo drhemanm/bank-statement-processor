@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useMemo } from 'react';
 import { Upload, Download, FileText, CheckCircle, AlertCircle, Play, TrendingUp, RotateCcw, Files, X, AlertTriangle, Settings, FileOutput, FilePlus } from 'lucide-react';
 import FlippableCard from './components/FlippableCard';
 import SimpleGroupingControls from './components/SimpleGroupingControls';
+import EnhancedResultsDisplay from './components/EnhancedResultsDisplay';
 import { generateExcelReport } from './utils/excelExport';
 
 const BankStatementProcessor = () => {
@@ -377,7 +378,6 @@ const BankStatementProcessor = () => {
       };
     }
   }, [addLog, handleError, extractStatementMetadata]);
-
   // Enhanced PDF extraction with better error handling
   const extractTextFromPDF = useCallback(async (file) => {
     try {
@@ -1429,7 +1429,7 @@ const BankStatementProcessor = () => {
               </div>
             </div>
           </div>
-		  )}
+        )}
       </div>
 
       {/* NEW: Simple Grouping Export Controls - Replaces old export section */}
@@ -1443,111 +1443,13 @@ const BankStatementProcessor = () => {
         />
       )}
 
-      {/* Enhanced Results Display */}
+      {/* Enhanced Results Display with Full Uncategorized Details */}
       {results && (
-        <div className="bg-white rounded-lg shadow-sm border p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-semibold text-gray-800">Processing Results</h2>
-            <div className="text-sm text-gray-600">
-              {stats.categorizedCount + stats.uncategorizedCount} total transactions processed
-            </div>
-          </div>
-          
-          {/* Balance Summary */}
-          <div className="mb-6 p-4 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg">
-            <h3 className="font-semibold text-gray-800 mb-2">Financial Summary</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-              <div>
-                <div className="text-xl font-bold text-green-600">MUR {stats.openingBalance.toLocaleString()}</div>
-                <div className="text-xs text-gray-600">Total Opening Balance</div>
-              </div>
-              <div>
-                <div className="text-xl font-bold text-blue-600">MUR {stats.closingBalance.toLocaleString()}</div>
-                <div className="text-xs text-gray-600">Total Closing Balance</div>
-              </div>
-              <div>
-                <div className="text-xl font-bold text-purple-600">{stats.totalTransactions}</div>
-                <div className="text-xs text-gray-600">Total Transactions</div>
-              </div>
-              <div>
-                <div className="text-xl font-bold text-orange-600">{Object.keys(fileStats).length}</div>
-                <div className="text-xs text-gray-600">Documents Processed</div>
-              </div>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            {Object.entries(results).map(([category, transactions]) => {
-              if (transactions.length === 0) return null;
-              
-              const categoryTotal = transactions.reduce((sum, t) => sum + t.amount, 0);
-              
-              return (
-                <div key={category} className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-medium text-gray-800">{category}</h3>
-                    <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                      {transactions.length}
-                    </span>
-                  </div>
-                  
-                  <div className="text-sm text-gray-600 mb-3">
-                    Total: MUR {categoryTotal.toLocaleString()}
-                  </div>
-                  
-                  <div className="space-y-2 max-h-40 overflow-y-auto">
-                    {transactions.slice(0, 5).map((transaction, index) => (
-                      <div key={index} className="text-xs border-l-2 border-blue-200 pl-2">
-                        <div className="font-medium">{transaction.description.substring(0, 40)}...</div>
-                        <div className="text-gray-500">
-                          {transaction.transactionDate} • MUR {transaction.amount.toLocaleString()}
-                          {transaction.sourceFile && ` • ${transaction.sourceFile.substring(0, 15)}...`}
-                        </div>
-                      </div>
-                    ))}
-                    {transactions.length > 5 && (
-                      <div className="text-xs text-gray-500 text-center py-1">
-                        +{transactions.length - 5} more transactions
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            
-            {uncategorizedData.length > 0 && (
-              <div className="border border-red-200 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-medium text-red-800">UNCATEGORIZED</h3>
-                  <span className="text-sm bg-red-100 text-red-800 px-2 py-1 rounded">
-                    {uncategorizedData.length}
-                  </span>
-                </div>
-                
-                <div className="text-sm text-red-600 mb-3">
-                  Requires manual review
-                </div>
-                
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {uncategorizedData.slice(0, 5).map((transaction, index) => (
-                    <div key={index} className="text-xs border-l-2 border-red-200 pl-2">
-                      <div className="font-medium">{transaction.description.substring(0, 40)}...</div>
-                      <div className="text-gray-500">
-                        {transaction.transactionDate} • MUR {transaction.amount.toLocaleString()}
-                        {transaction.sourceFile && ` • ${transaction.sourceFile.substring(0, 15)}...`}
-                      </div>
-                    </div>
-                  ))}
-                  {uncategorizedData.length > 5 && (
-                    <div className="text-xs text-gray-500 text-center py-1">
-                      +{uncategorizedData.length - 5} more transactions
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        <EnhancedResultsDisplay 
+          results={results}
+          uncategorizedData={uncategorizedData}
+          fileStats={fileStats}
+        />
       )}
 
       {/* Processing Logs */}
@@ -1588,4 +1490,3 @@ const BankStatementProcessor = () => {
 };
 
 export default BankStatementProcessor;
-		  
