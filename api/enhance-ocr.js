@@ -182,7 +182,7 @@ Return the extracted text maintaining the original statement's structure and for
     } else {
       // TEXT ENHANCEMENT with Claude - Enhanced for MCB format
       const textPayload = {
-        model: "claude-3-5-sonnet-20241022",
+        model: "claude-3-opus-20240229",
         max_tokens: 4000,
         temperature: 0.1,
         messages: [
