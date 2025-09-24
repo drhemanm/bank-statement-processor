@@ -377,7 +377,9 @@ const BankStatementProcessor = () => {
       accountType: 'Current Account'
     };
 
-    // MCB-specific extraction patterns
+    addLog(`DEBUG: Looking for balances in text of length ${text.length}`, 'info');
+
+    // MCB-specific extraction patterns - FIXED
     const patterns = {
       accountNumber: [
         /Account\s+Number\s*:\s*(\d+)/i,
@@ -390,10 +392,12 @@ const BankStatementProcessor = () => {
         /From\s+(\d{2}\/\d{2}\/\d{4})\s+to\s+(\d{2}\/\d{2}\/\d{4})/i
       ],
       openingBalance: [
-        /Opening\s+Balance\s+([\d,]+\.?\d*)/i
+        /Opening\s+Balance\s+([\d,]+\.?\d*)/i,
+        /Balance\s+([\d,]+\.?\d*)/i  // More flexible pattern
       ],
       closingBalance: [
-        /Closing\s+Balance\s+([\d,]+\.?\d*)/i
+        /Closing\s+Balance\s+([\d,]+\.?\d*)/i,
+        /(?:Closing|Final)\s+Balance\s+([\d,]+\.?\d*)/i
       ]
     };
 
@@ -405,18 +409,22 @@ const BankStatementProcessor = () => {
           switch (field) {
             case 'accountNumber':
               metadata[field] = match[1];
+              addLog(`Found account number: ${match[1]}`, 'info');
               break;
             case 'iban':
               metadata[field] = match[1];
+              addLog(`Found IBAN: ${match[1]}`, 'info');
               break;
             case 'statementPeriod':
               if (match[2]) {
                 metadata[field] = `${match[1]} to ${match[2]}`;
+                addLog(`Found period: ${match[1]} to ${match[2]}`, 'info');
               }
               break;
             case 'openingBalance':
             case 'closingBalance':
               metadata[field] = parseFloat(match[1].replace(/,/g, '')) || 0;
+              addLog(`Found ${field}: ${match[1]} (parsed as ${metadata[field]})`, 'info');
               break;
           }
           break;
@@ -424,57 +432,136 @@ const BankStatementProcessor = () => {
       }
     });
 
+    // If we didn't find opening/closing balance, look for specific MCB patterns
+    if (metadata.openingBalance === 0) {
+      // Look for "Opening Balance 7,096.39" pattern specifically
+      const openingMatch = text.match(/Opening\s+Balance\s+([\d,]+\.?\d*)/i);
+      if (openingMatch) {
+        metadata.openingBalance = parseFloat(openingMatch[1].replace(/,/g, '')) || 0;
+        addLog(`Found opening balance via specific pattern: ${openingMatch[1]}`, 'success');
+      } else {
+        addLog(`DEBUG: Could not find opening balance. Sample text: ${text.substring(0, 500)}...`, 'warning');
+      }
+    }
+
+    if (metadata.closingBalance === 0) {
+      // Look for "Closing Balance 105,373.39" pattern specifically  
+      const closingMatch = text.match(/Closing\s+Balance\s+([\d,]+\.?\d*)/i);
+      if (closingMatch) {
+        metadata.closingBalance = parseFloat(closingMatch[1].replace(/,/g, '')) || 0;
+        addLog(`Found closing balance via specific pattern: ${closingMatch[1]}`, 'success');
+      } else {
+        addLog(`DEBUG: Could not find closing balance. Looking for last balance in transactions...`, 'warning');
+        // Try to find the last balance mentioned in the text
+        const balanceMatches = text.match(/Balance\s+([\d,]+\.?\d*)/gi);
+        if (balanceMatches && balanceMatches.length > 0) {
+          const lastBalance = balanceMatches[balanceMatches.length - 1];
+          const balanceValue = parseFloat(lastBalance.match(/([\d,]+\.?\d*)/)[1].replace(/,/g, ''));
+          metadata.closingBalance = balanceValue;
+          addLog(`Using last balance found as closing balance: ${balanceValue}`, 'info');
+        }
+      }
+    }
+
     addLog(`Extracted metadata: Opening Balance MUR ${metadata.openingBalance.toLocaleString()}, Closing Balance MUR ${metadata.closingBalance.toLocaleString()}`, 'success');
     return metadata;
   };
 
-  // MCB-specific transaction extraction
+  // MCB-specific transaction extraction - FIXED PATTERNS
   const extractTransactions = async (text, fileName) => {
     const transactions = [];
     const lines = text.split('\n').filter(line => line.trim());
 
-    // MCB transaction pattern: DATE DATE DESCRIPTION DEBIT CREDIT BALANCE
-    const mcbPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
-    
-    // Alternative pattern for transactions with separate debit/credit columns
-    const mcbTablePattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(?:([\d,]+\.?\d*)\s+)?([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
+    addLog(`DEBUG: Starting transaction extraction from ${lines.length} lines`, 'info');
     
     let transactionCounter = 0;
-    let currentDescription = '';
-    let pendingTransaction = null;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       
       // Skip empty lines and headers
-      if (!line || line.includes('TRANS DATE') || line.includes('BALANCE') || line.includes('Current Account')) {
+      if (!line || 
+          line.includes('TRANS DATE') || 
+          line.includes('TRANSACTION DETAILS') ||
+          line.includes('BALANCE') || 
+          line.includes('Current Account') ||
+          line.includes('Page :') ||
+          line.includes('MCB') ||
+          line.length < 20) {
         continue;
       }
 
-      // Try to match MCB transaction format
-      let match = line.match(mcbTablePattern);
+      // MCB transaction patterns - more flexible matching
+      // Pattern 1: DD/MM/YYYY DD/MM/YYYY Description Amount Balance (most common)
+      let match = line.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})$/);
       
-      if (match) {
-        transactionCounter++;
+      if (!match) {
+        // Pattern 2: DD/MM/YYYY DD/MM/YYYY Description DEBIT_AMT CREDIT_AMT BALANCE
+        match = line.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d{2})?\s*([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})$/);
         
-        const [, transactionDate, valueDate, description, debit = '', credit = '', balance] = match;
+        if (match) {
+          // Adjust for debit/credit format
+          const [, transactionDate, valueDate, description, possibleDebit, possibleCredit, balance] = match;
+          
+          // Determine if possibleCredit is actually the amount and balance
+          let debitAmount = 0, creditAmount = 0, balanceAmount = 0;
+          
+          if (possibleDebit && possibleCredit && balance) {
+            // Format: DATE DATE DESC DEBIT CREDIT BALANCE
+            debitAmount = parseFloat(possibleDebit.replace(/,/g, '')) || 0;
+            creditAmount = parseFloat(possibleCredit.replace(/,/g, '')) || 0;
+            balanceAmount = parseFloat(balance.replace(/,/g, '')) || 0;
+          } else {
+            // Format: DATE DATE DESC AMOUNT BALANCE
+            debitAmount = 0;
+            creditAmount = parseFloat(possibleCredit.replace(/,/g, '')) || 0;
+            balanceAmount = parseFloat(balance.replace(/,/g, '')) || 0;
+          }
+          
+          const amount = Math.max(debitAmount, creditAmount);
+          const isDebit = debitAmount > creditAmount;
+          
+          if (amount > 0) {
+            transactionCounter++;
+            const transaction = {
+              transactionDate: transactionDate,
+              valueDate: valueDate,
+              description: description.trim(),
+              amount,
+              balance: balanceAmount,
+              isDebit,
+              sourceFile: fileName,
+              transactionId: `${fileName}_${transactionCounter}`,
+              rawLine: line
+            };
+            
+            transactions.push(transaction);
+            addLog(`Found transaction ${transactionCounter}: ${description.substring(0, 30)}... MUR ${amount.toLocaleString()}`, 'info');
+          }
+        }
+      } else {
+        // Pattern 1 matched
+        const [, transactionDate, valueDate, description, amount, balance] = match;
         
-        // Clean and parse amounts
-        const debitAmount = debit ? parseFloat(debit.replace(/,/g, '')) || 0 : 0;
-        const creditAmount = credit ? parseFloat(credit.replace(/,/g, '')) || 0 : 0;
-        const balanceAmount = parseFloat(balance.replace(/,/g, '')) || 0;
+        const amountValue = parseFloat(amount.replace(/,/g, '')) || 0;
+        const balanceValue = parseFloat(balance.replace(/,/g, '')) || 0;
         
-        // Determine actual amount and type
-        const amount = debitAmount > 0 ? debitAmount : creditAmount;
-        const isDebit = debitAmount > 0;
-        
-        if (amount > 0) {
+        if (amountValue > 0) {
+          transactionCounter++;
+          
+          // Determine if it's debit or credit by looking at balance change
+          // This is a simple heuristic - you might need to adjust based on your data
+          const isDebit = description.toLowerCase().includes('withdrawal') || 
+                          description.toLowerCase().includes('charge') ||
+                          description.toLowerCase().includes('fee') ||
+                          description.toLowerCase().includes('payment to');
+          
           const transaction = {
             transactionDate: transactionDate,
             valueDate: valueDate,
             description: description.trim(),
-            amount,
-            balance: balanceAmount,
+            amount: amountValue,
+            balance: balanceValue,
             isDebit,
             sourceFile: fileName,
             transactionId: `${fileName}_${transactionCounter}`,
@@ -482,20 +569,23 @@ const BankStatementProcessor = () => {
           };
           
           transactions.push(transaction);
-          addLog(`Transaction ${transactionCounter}: ${description.substring(0, 50)}... - MUR ${amount.toLocaleString()}`, 'info');
-        }
-      } else {
-        // Check if this line is a continuation of the previous transaction description
-        const datePattern = /^\d{2}\/\d{2}\/\d{4}/;
-        if (!datePattern.test(line) && transactions.length > 0) {
-          // This might be a continuation line
-          const lastTransaction = transactions[transactions.length - 1];
-          lastTransaction.description += ' ' + line.trim();
+          addLog(`Found transaction ${transactionCounter}: ${description.substring(0, 30)}... MUR ${amountValue.toLocaleString()}`, 'info');
         }
       }
     }
 
     addLog(`Extracted ${transactions.length} transactions from ${fileName}`, transactions.length > 0 ? 'success' : 'warning');
+    
+    if (transactions.length === 0) {
+      // Debug: Show some sample lines to understand the format
+      addLog(`DEBUG: Sample lines from ${fileName}:`, 'warning');
+      lines.slice(0, 10).forEach((line, index) => {
+        if (line.trim() && line.includes('/')) {
+          addLog(`Line ${index}: ${line}`, 'warning');
+        }
+      });
+    }
+    
     return transactions;
   };
 
