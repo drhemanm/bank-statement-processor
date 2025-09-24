@@ -3,15 +3,9 @@
   "functions": {
     "api/enhance-ocr.js": {
       "maxDuration": 30
-    }
-  },
-  "env": {
-    "ANTHROPIC_API_KEY": "@anthropic_api_key"
-  },
-  "build": {
-    "env": {
-      "REACT_APP_VERSION": "1.0.0",
-      "GENERATE_SOURCEMAP": "false"
+    },
+    "api/debug.js": {
+      "maxDuration": 10
     }
   },
   "buildCommand": "npm run build",
