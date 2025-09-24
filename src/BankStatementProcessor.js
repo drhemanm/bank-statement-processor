@@ -99,36 +99,14 @@ const BankStatementProcessor = () => {
     setDocumentCounters({});
   };
 
-  // Enhanced OCR function with Claude Vision API
+  // SIMPLIFIED OCR function - no external API calls
   const enhanceOCRWithClaude = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
-    try {
-      const response = await fetch('/api/enhance-ocr', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ocrText: ocrText,
-          imageData: imageData,
-          isImage: isImage,
-          pageNumber: pageNumber
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(`API request failed: ${response.status} - ${errorData.message || response.statusText}`);
-      }
-
-      const data = await response.json();
-      return isImage ? data.ocrText : data.enhancedText;
-    } catch (error) {
-      addLog(`OCR enhancement failed for page ${pageNumber}: ${error.message}`, 'warning');
-      return ocrText; // Return original text if enhancement fails
-    }
+    // Skip OCR enhancement - core functionality works fine without it
+    addLog(`Page ${pageNumber}: Using direct text extraction (OCR enhancement disabled)`, 'info');
+    return ocrText;
   };
 
-  // Improved PDF processing with enhanced OCR
+  // PDF processing 
   const processPDF = async (file) => {
     try {
       addLog(`Processing PDF: ${file.name}`, 'info');
@@ -137,33 +115,23 @@ const BankStatementProcessor = () => {
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       let allText = '';
       let pageTexts = [];
-      let successfulPages = 0;
 
-      // Process each page with better error handling
+      // Process each page
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         addLog(`Processing page ${pageNum}/${pdf.numPages} of ${file.name}`, 'info');
         
         try {
           const page = await pdf.getPage(pageNum);
-          let pageText = '';
           
-          // Strategy 1: Try direct text extraction first
-          try {
-            const textContent = await page.getTextContent();
-            pageText = textContent.items.map(item => item.str).join(' ');
+          // First try to extract text directly from PDF
+          const textContent = await page.getTextContent();
+          let pageText = textContent.items.map(item => item.str).join(' ');
+          
+          // If direct text extraction yields poor results, use OCR
+          if (!pageText || pageText.trim().length < 50) {
+            addLog(`Page ${pageNum} has minimal text, using OCR...`, 'info');
             
-            // Check if we got meaningful text (not just spaces/numbers)
-            const meaningfulText = pageText.replace(/[\s\d\.,\-\/]/g, '');
-            if (meaningfulText.length < 20) {
-              throw new Error('Insufficient meaningful text extracted');
-            }
-            
-            addLog(`Page ${pageNum}: Direct text extraction successful (${pageText.length} chars)`, 'info');
-            
-          } catch (textError) {
-            addLog(`Page ${pageNum}: Direct text extraction failed, trying OCR...`, 'info');
-            
-            // Strategy 2: OCR fallback
+            // Render page to canvas for OCR
             const canvas = document.createElement('canvas');
             const canvasContext = canvas.getContext('2d');
             const viewport = page.getViewport({ scale: 2.0 });
@@ -176,75 +144,43 @@ const BankStatementProcessor = () => {
               viewport: viewport
             }).promise;
             
-            // Try Claude Vision API first
+            // Use Tesseract for OCR
             try {
-              const imageDataUrl = canvas.toDataURL('image/png');
-              const base64Data = imageDataUrl.split(',')[1];
-              
-              pageText = await enhanceOCRWithClaude('', base64Data, true, pageNum);
-              
-              if (pageText && pageText.trim().length > 20) {
-                addLog(`Page ${pageNum}: Claude Vision OCR successful`, 'info');
-              } else {
-                throw new Error('Claude Vision OCR returned insufficient text');
-              }
-              
-            } catch (claudeError) {
-              addLog(`Page ${pageNum}: Claude Vision failed, trying Tesseract...`, 'warning');
-              
-              // Strategy 3: Tesseract fallback
-              try {
-                const ocrResult = await Tesseract.recognize(canvas, 'eng', {
-                  logger: m => {
-                    if (m.status === 'recognizing text') {
-                      addLog(`OCR progress page ${pageNum}: ${Math.round(m.progress * 100)}%`, 'info');
-                    }
+              const ocrResult = await Tesseract.recognize(canvas, 'eng', {
+                logger: m => {
+                  if (m.status === 'recognizing text') {
+                    addLog(`OCR progress: ${Math.round(m.progress * 100)}%`, 'info');
                   }
-                });
-                
-                pageText = ocrResult.data.text;
-                addLog(`Page ${pageNum}: Tesseract OCR completed`, 'info');
-                
-              } catch (tesseractError) {
-                addLog(`Page ${pageNum}: All OCR methods failed - ${tesseractError.message}`, 'error');
-                pageText = `[Page ${pageNum}: Text extraction failed]`;
-              }
+                }
+              });
+              pageText = ocrResult.data.text;
+              addLog(`Page ${pageNum}: Tesseract OCR completed`, 'info');
+            } catch (tesseractError) {
+              addLog(`Page ${pageNum}: OCR failed - ${tesseractError.message}`, 'error');
+              pageText = `[Page ${pageNum}: Text extraction failed]`;
             }
           }
           
-          // Strategy 4: Enhance text with Claude if we have content
+          // Enhance text if we have content
           if (pageText && pageText.trim().length > 20) {
-            try {
-              const enhancedText = await enhanceOCRWithClaude(pageText, null, false, pageNum);
-              if (enhancedText && enhancedText.trim().length > pageText.trim().length * 0.5) {
-                pageText = enhancedText;
-                addLog(`Page ${pageNum}: Text enhancement successful`, 'info');
-              }
-            } catch (enhanceError) {
-              addLog(`Page ${pageNum}: Text enhancement failed, using original text`, 'warning');
-            }
+            const enhancedText = await enhanceOCRWithClaude(pageText, null, false, pageNum);
+            pageText = enhancedText || pageText;
           }
           
           pageTexts.push(pageText);
-          allText += pageText + '\n\n';
-          successfulPages++;
+          allText += pageText + '\n';
           
         } catch (pageError) {
           addLog(`Error processing page ${pageNum}: ${pageError.message}`, 'error');
-          pageTexts.push(`[Page ${pageNum}: Processing failed - ${pageError.message}]`);
           continue;
         }
       }
 
-      if (successfulPages === 0) {
-        throw new Error('No pages could be processed successfully');
+      if (!allText.trim()) {
+        throw new Error('No text could be extracted from this PDF');
       }
 
-      if (!allText.trim() || allText.trim().length < 50) {
-        throw new Error('Insufficient text could be extracted from this PDF');
-      }
-
-      addLog(`Successfully processed ${successfulPages}/${pdf.numPages} pages from ${file.name} (${allText.length} characters)`, 'success');
+      addLog(`Successfully extracted text from ${file.name} (${allText.length} characters)`, 'success');
       return allText;
 
     } catch (error) {
@@ -333,87 +269,50 @@ const BankStatementProcessor = () => {
     return metadata;
   };
 
-  // Enhanced transaction extraction with multiple patterns
+  // Enhanced transaction extraction
   const extractTransactions = (text, fileName) => {
     const transactions = [];
     const lines = text.split('\n').filter(line => line.trim());
 
-    // Multiple transaction patterns to handle different bank formats
-    const transactionPatterns = [
-      // Pattern 1: Date Date Description Amount Balance
-      /(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})?\s*(.+?)\s+([-+]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([-+]?\d{1,3}(?:,\d{3})*\.?\d*)$/,
-      
-      // Pattern 2: Date Description Amount Balance (no value date)
-      /(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([-+]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([-+]?\d{1,3}(?:,\d{3})*\.?\d*)$/,
-      
-      // Pattern 3: DD-MM-YYYY format
-      /(\d{1,2}-\d{1,2}-\d{4})\s+(\d{1,2}-\d{1,2}-\d{4})?\s*(.+?)\s+([-+]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([-+]?\d{1,3}(?:,\d{3})*\.?\d*)$/,
-      
-      // Pattern 4: More flexible spacing
-      /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\s+(.+?)\s+([-+]?\s?\d{1,3}(?:,\d{3})*\.?\d*)\s+([-+]?\s?\d{1,3}(?:,\d{3})*\.?\d*)$/
-    ];
+    // Enhanced transaction pattern - more flexible
+    const transactionPattern = /(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})?\s*(.+?)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)$/;
     
     let transactionCounter = 0;
 
     for (const line of lines) {
-      let matched = false;
-      
-      // Try each pattern
-      for (let i = 0; i < transactionPatterns.length && !matched; i++) {
-        const pattern = transactionPatterns[i];
-        const match = line.match(pattern);
+      const match = line.match(transactionPattern);
+      if (match) {
+        transactionCounter++;
         
-        if (match) {
-          matched = true;
-          transactionCounter++;
-          
-          let transactionDate, valueDate, description, amountStr, balanceStr;
-          
-          if (match.length === 6) {
-            // Pattern with value date
-            [, transactionDate, valueDate, description, amountStr, balanceStr] = match;
-            valueDate = valueDate || transactionDate;
-          } else {
-            // Pattern without value date
-            [, transactionDate, description, amountStr, balanceStr] = match;
-            valueDate = transactionDate;
-          }
-          
-          // Clean and parse amounts
-          amountStr = amountStr.replace(/\s+/g, '').replace(/,/g, '');
-          balanceStr = balanceStr.replace(/\s+/g, '').replace(/,/g, '');
-          
-          const amount = Math.abs(parseFloat(amountStr));
-          const balance = parseFloat(balanceStr);
-          
-          // Determine if it's a debit
-          const isDebit = amountStr.includes('-') || 
-                         description.toLowerCase().includes('withdrawal') || 
-                         description.toLowerCase().includes('charge') ||
-                         description.toLowerCase().includes('fee');
-          
-          // Clean description
-          description = description.replace(/\s+/g, ' ').trim();
-          
-          // Validate parsed values
-          if (!isNaN(amount) && !isNaN(balance) && amount > 0 && description.length > 2) {
-            transactions.push({
-              transactionDate: transactionDate.replace(/-/g, '/'), // Normalize date format
-              valueDate: valueDate.replace(/-/g, '/'),
-              description,
-              amount,
-              balance,
-              isDebit,
-              sourceFile: fileName,
-              transactionId: `${fileName}_${transactionCounter}`,
-              rawLine: line // Keep original for debugging
-            });
-          }
+        const transactionDate = match[1];
+        const valueDate = match[2] || match[1]; // Use transaction date if value date missing
+        let description = match[3].trim();
+        const amountStr = match[4].replace(/,/g, '');
+        const balanceStr = match[5].replace(/,/g, '');
+
+        // Parse amounts
+        const amount = Math.abs(parseFloat(amountStr));
+        const balance = parseFloat(balanceStr);
+        const isDebit = amountStr.includes('-') || description.toLowerCase().includes('withdrawal') || description.toLowerCase().includes('charge');
+
+        // Clean description
+        description = description.replace(/\s+/g, ' ').trim();
+
+        if (!isNaN(amount) && !isNaN(balance) && amount > 0) {
+          transactions.push({
+            transactionDate,
+            valueDate,
+            description,
+            amount,
+            balance,
+            isDebit,
+            sourceFile: fileName,
+            transactionId: `${fileName}_${transactionCounter}`
+          });
         }
       }
     }
 
-    addLog(`Extracted ${transactions.length} transactions from ${fileName}`, 'info');
     return transactions;
   };
 
@@ -582,7 +481,7 @@ const BankStatementProcessor = () => {
             <h1 className="text-3xl font-bold text-gray-900">Bank Statement Processor</h1>
           </div>
           <p className="text-lg text-gray-600">
-            Automated transaction categorization and Excel export with enhanced OCR
+            Automated transaction categorization and Excel export
           </p>
         </div>
 
@@ -592,7 +491,7 @@ const BankStatementProcessor = () => {
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-semibold text-gray-800">Upload Bank Statements</h2>
               <div className="text-sm text-gray-500">
-                Supports PDF files with OCR enhancement
+                Supports PDF files with OCR processing
               </div>
             </div>
             
