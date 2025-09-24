@@ -86,7 +86,7 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Check API status on mount
+  // Check API status on mount - UPDATED WITH BETTER ERROR HANDLING
   useEffect(() => {
     checkAPIStatus();
   }, []);
@@ -94,19 +94,32 @@ const BankStatementProcessor = () => {
   const checkAPIStatus = async () => {
     try {
       setCurrentStep('Checking Claude API status...');
-      const response = await fetch('/api/debug');
+      
+      // Use the correct URL based on environment
+      const apiUrl = process.env.NODE_ENV === 'development' 
+        ? 'http://localhost:3000/api/debug'
+        : '/api/debug';
+      
+      console.log('Checking API status at:', apiUrl);
+      
+      const response = await fetch(apiUrl);
       const data = await response.json();
+      
+      console.log('API Status Response:', data); // Debug logging
       
       if (data.apiTestResult?.status === 'SUCCESS') {
         setApiStatus('working');
         setAiEnhancementEnabled(true);
         addLog('✅ Claude AI enhancement is available', 'success');
+        console.log('AI Enhancement enabled successfully');
       } else {
         setApiStatus('error');
         addLog(`⚠️ AI unavailable: ${data.apiTestResult?.error || 'Will use OCR'}`, 'warning');
         setAiEnhancementEnabled(false);
+        console.log('AI Enhancement not available:', data.apiTestResult);
       }
     } catch (error) {
+      console.error('API Status Check Error:', error);
       setApiStatus('error');
       addLog('⚠️ AI unavailable - using fallback OCR', 'warning');
       setAiEnhancementEnabled(false);
@@ -178,9 +191,10 @@ const BankStatementProcessor = () => {
     return true;
   };
 
-  // Extract text with AI enhancement
+  // Extract text with AI enhancement - UPDATED WITH BETTER API HANDLING
   const enhanceOCRWithClaude = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
     if (!aiEnhancementEnabled) {
+      console.log('AI enhancement disabled, returning original text');
       return ocrText;
     }
 
@@ -192,7 +206,15 @@ const BankStatementProcessor = () => {
         pageNumber: pageNumber
       };
 
-      const response = await fetch('/api/enhance-ocr', {
+      // Use the correct URL based on environment
+      const apiUrl = process.env.NODE_ENV === 'development' 
+        ? 'http://localhost:3000/api/enhance-ocr'
+        : '/api/enhance-ocr';
+
+      console.log('Calling enhance API:', apiUrl);
+      console.log('Request type:', isImage ? 'Image OCR' : 'Text Enhancement');
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -200,20 +222,28 @@ const BankStatementProcessor = () => {
         body: JSON.stringify(requestBody)
       });
 
+      console.log('Enhance API Response Status:', response.status);
+
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        const errorData = await response.json();
+        console.error('API Error:', errorData);
+        throw new Error(`API error: ${response.status} - ${errorData.message}`);
       }
 
       const data = await response.json();
+      console.log('Enhancement successful, method:', data.method);
       
       if (isImage && data.ocrText) {
+        addLog(`✅ AI Vision OCR completed for page ${pageNumber}`, 'success');
         return data.ocrText;
       } else if (data.enhancedText) {
+        addLog(`✅ AI text enhancement completed for page ${pageNumber}`, 'success');
         return data.enhancedText;
       }
       
       return ocrText;
     } catch (error) {
+      console.error('Enhancement error:', error);
       addLog(`⚠️ AI enhancement failed: ${error.message}`, 'warning');
       return ocrText;
     }
