@@ -1,4 +1,4 @@
-// Enhanced Excel Export with Category-Based Sheets for MCB Statements
+// Enhanced Excel Export for MCB Bank Statements
 
 const loadXLSX = () => {
   return new Promise((resolve) => {
@@ -14,6 +14,17 @@ const loadXLSX = () => {
   });
 };
 
+// Helper function to format currency
+const formatCurrency = (amount) => {
+  return `MUR ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+// Helper function to format date
+const formatDate = (dateStr) => {
+  if (!dateStr) return '';
+  return dateStr;
+};
+
 export const generateExcelReport = async (
   results, 
   uncategorizedData, 
@@ -25,378 +36,651 @@ export const generateExcelReport = async (
   groupingConfig = null
 ) => {
   if (!results) {
-    addLog('No results to download', 'error');
+    addLog('❌ No data to export', 'error');
     return;
   }
 
   const XLSX = await loadXLSX();
-  const timestamp = new Date().toLocaleDateString().replace(/\//g, '-');
+  const timestamp = new Date().toISOString().split('T')[0];
   
-  if (exportMode === 'separate') {
-    // Generate separate Excel files for each document
-    Object.keys(fileStats).forEach(fileName => {
-      const fileData = fileStats[fileName];
-      const metadata = statementMetadata[fileName] || {};
-      
-      if (fileData.status === 'success') {
-        const wb = XLSX.utils.book_new();
-        
-        // Create Summary Sheet
-        const summaryData = [
-          ['MCB BANK STATEMENT ANALYSIS - INDIVIDUAL DOCUMENT'],
-          ['File Name:', fileName],
-          ['Statement Period:', metadata.statementPeriod || 'Not specified'],
-          ['Account Number:', metadata.accountNumber || 'Not specified'],
-          ['IBAN:', metadata.iban || 'Not specified'],
-          ['Currency:', metadata.currency || 'MUR'],
-          [], // Empty row
-          ['BALANCE INFORMATION:'],
-          ['Opening Balance:', `${metadata.currency || 'MUR'} ${(metadata.openingBalance || 0).toLocaleString()}`],
-          ['Closing Balance:', `${metadata.currency || 'MUR'} ${(metadata.closingBalance || 0).toLocaleString()}`],
-          ['Net Change:', `${metadata.currency || 'MUR'} ${((metadata.closingBalance || 0) - (metadata.openingBalance || 0)).toLocaleString()}`],
-          [], // Empty row
-          ['TRANSACTION SUMMARY:'],
-          ['Total Transactions:', fileData.total || 0],
-          ['Categorized:', fileData.categorized || 0],
-          ['Uncategorized:', fileData.uncategorized || 0],
-          ['Success Rate:', `${fileData.total > 0 ? ((fileData.categorized / fileData.total) * 100).toFixed(1) : 0}%`],
-          ['Generated on:', new Date().toLocaleString()],
-          [], // Empty row
-          ['CATEGORY BREAKDOWN:'],
-          ['Category', 'Count', 'Total Amount (MUR)']
-        ];
+  try {
+    if (exportMode === 'separate') {
+      // SEPARATE MODE - One Excel per document
+      await generateSeparateFiles(XLSX, results, uncategorizedData, fileStats, statementMetadata, timestamp, addLog);
+    } else {
+      // COMBINED MODE - Single Excel with all data
+      await generateCombinedFile(XLSX, results, uncategorizedData, fileStats, statementMetadata, timestamp, addLog);
+    }
+  } catch (error) {
+    addLog(`❌ Export failed: ${error.message}`, 'error');
+    throw error;
+  }
+};
 
-        // Add category breakdown
-        Object.entries(results).forEach(([category, transactions]) => {
-          const fileTransactions = transactions.filter(t => t.sourceFile === fileName);
-          if (fileTransactions.length > 0) {
-            const totalAmount = fileTransactions.reduce((sum, t) => sum + t.amount, 0);
-            summaryData.push([category, fileTransactions.length, totalAmount.toFixed(2)]);
-          }
-        });
-
-        // Add uncategorized if any
-        const fileUncategorized = uncategorizedData.filter(t => t.sourceFile === fileName);
-        if (fileUncategorized.length > 0) {
-          const totalAmount = fileUncategorized.reduce((sum, t) => sum + t.amount, 0);
-          summaryData.push(['Uncategorized', fileUncategorized.length, totalAmount.toFixed(2)]);
-        }
-
-        const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryData);
-        XLSX.utils.book_append_sheet(wb, summaryWorksheet, "Summary");
-
-        // Create separate sheet for each category with transactions
-        Object.entries(results).forEach(([category, allTransactions]) => {
-          const categoryTransactions = allTransactions.filter(t => t.sourceFile === fileName);
-          
-          if (categoryTransactions.length > 0) {
-            const categoryData = [
-              [`${category.toUpperCase()} TRANSACTIONS`],
-              ['File:', fileName],
-              ['Count:', categoryTransactions.length],
-              ['Total Amount:', `MUR ${categoryTransactions.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}`],
-              [], // Empty row
-              ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Type', 'Confidence']
-            ];
-
-            categoryTransactions.forEach(transaction => {
-              categoryData.push([
-                transaction.transactionDate,
-                transaction.valueDate,
-                transaction.description,
-                transaction.amount.toFixed(2),
-                transaction.balance.toFixed(2),
-                transaction.isDebit ? 'Debit' : 'Credit',
-                transaction.confidence ? (transaction.confidence * 100).toFixed(1) + '%' : 'N/A'
-              ]);
-            });
-
-            const categoryWorksheet = XLSX.utils.aoa_to_sheet(categoryData);
-            // Clean sheet name for Excel compatibility
-            const sheetName = category.replace(/[\/\\*?[\]]/g, '_').substring(0, 31);
-            XLSX.utils.book_append_sheet(wb, categoryWorksheet, sheetName);
-          }
-        });
-
-        // Create Uncategorized sheet if there are uncategorized transactions
-        if (fileUncategorized.length > 0) {
-          const uncategorizedSheetData = [
-            ['UNCATEGORIZED TRANSACTIONS'],
-            ['File:', fileName],
-            ['Count:', fileUncategorized.length],
-            ['Total Amount:', `MUR ${fileUncategorized.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}`],
-            [], // Empty row
-            ['⚠️ ATTENTION: These transactions need manual categorization'],
-            [], // Empty row
-            ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Type', 'Reason']
-          ];
-
-          fileUncategorized.forEach(transaction => {
-            uncategorizedSheetData.push([
-              transaction.transactionDate,
-              transaction.valueDate,
-              transaction.description,
-              transaction.amount.toFixed(2),
-              transaction.balance.toFixed(2),
-              transaction.isDebit ? 'Debit' : 'Credit',
-              transaction.reason || 'No pattern match'
-            ]);
-          });
-
-          const uncategorizedWorksheet = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
-          XLSX.utils.book_append_sheet(wb, uncategorizedWorksheet, "Uncategorized");
-        }
-        
-        // Download file
-        const cleanFileName = fileName.replace(/\.[^/.]+$/, "").replace(/[\/\\*?[\]]/g, '_');
-        downloadExcelFile(wb, `${cleanFileName}_MCB_Analysis_${timestamp}.xlsx`);
-      }
-    });
+// Generate separate Excel files for each document
+const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats, statementMetadata, timestamp, addLog) => {
+  let filesGenerated = 0;
+  
+  for (const [fileName, fileStat] of Object.entries(fileStats)) {
+    if (fileStat.status !== 'success') continue;
     
-    addLog(`${Object.keys(fileStats).length} Excel files with category sheets downloaded successfully!`, 'success');
-    
-  } else {
-    // COMBINED MODE - Single Excel with category-based sheets
     const wb = XLSX.utils.book_new();
+    const metadata = statementMetadata[fileName] || {};
     
-    // Calculate totals from metadata
-    const totalOpeningBalance = Object.values(statementMetadata).reduce((sum, meta) => sum + (meta.openingBalance || 0), 0);
-    const totalClosingBalance = Object.values(statementMetadata).reduce((sum, meta) => sum + (meta.closingBalance || 0), 0);
-    const totalNetChange = totalClosingBalance - totalOpeningBalance;
-    
-    // CREATE SUMMARY SHEET
-    const summaryData = [
-      ['MCB BANK STATEMENT ANALYSIS - CONSOLIDATED REPORT'],
-      ['Generated on:', new Date().toLocaleString()],
-      ['Documents Processed:', Object.keys(fileStats).length],
-      [], // Empty row
-      ['CONSOLIDATED BALANCE SUMMARY:'],
-      ['Total Opening Balance:', `MUR ${totalOpeningBalance.toLocaleString()}`],
-      ['Total Closing Balance:', `MUR ${totalClosingBalance.toLocaleString()}`],
-      ['Net Change Across All Documents:', `MUR ${totalNetChange.toLocaleString()}`],
-      [], // Empty row
-      ['TRANSACTION SUMMARY BY CATEGORY:'],
-      ['Category', 'Transaction Count', 'Total Amount (MUR)', 'Percentage of Total']
+    // 1. COVER SHEET with comprehensive summary
+    const coverData = [
+      ['MCB BANK STATEMENT ANALYSIS'],
+      [''],
+      ['DOCUMENT INFORMATION'],
+      ['File Name:', fileName],
+      ['Processing Date:', new Date().toLocaleString()],
+      ['Statement Period:', metadata.statementPeriod || 'Not specified'],
+      ['Account Number:', metadata.accountNumber || 'Not specified'],
+      ['Bank:', 'Mauritius Commercial Bank Ltd.'],
+      ['Currency:', 'MUR (Mauritian Rupee)'],
+      [''],
+      ['BALANCE SUMMARY'],
+      ['Opening Balance:', formatCurrency(metadata.openingBalance || 0)],
+      ['Closing Balance:', formatCurrency(metadata.closingBalance || 0)],
+      ['Net Change:', formatCurrency((metadata.closingBalance || 0) - (metadata.openingBalance || 0))],
+      [''],
+      ['TRANSACTION SUMMARY'],
+      ['Total Transactions:', fileStat.total || 0],
+      ['Successfully Categorized:', fileStat.categorized || 0],
+      ['Uncategorized (Need Review):', fileStat.uncategorized || 0],
+      ['Categorization Success Rate:', `${fileStat.successRate || 0}%`],
+      [''],
+      ['CATEGORY BREAKDOWN'],
+      ['Category', 'Count', 'Debit Amount', 'Credit Amount', 'Net Amount']
     ];
 
-    // Calculate total transactions and amounts for percentages
-    const allTransactions = Object.values(results).flat().concat(uncategorizedData);
-    const totalTransactionAmount = allTransactions.reduce((sum, t) => sum + t.amount, 0);
+    // Add category summaries
+    let totalDebits = 0;
+    let totalCredits = 0;
     
-    // Add each category summary
     Object.entries(results).forEach(([category, transactions]) => {
-      if (transactions.length > 0) {
-        const categoryAmount = transactions.reduce((sum, t) => sum + t.amount, 0);
-        const percentage = totalTransactionAmount > 0 ? ((categoryAmount / totalTransactionAmount) * 100).toFixed(1) : '0.0';
-        summaryData.push([
+      const categoryTrans = transactions.filter(t => t.sourceFile === fileName);
+      if (categoryTrans.length > 0) {
+        const debits = categoryTrans.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+        const credits = categoryTrans.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+        totalDebits += debits;
+        totalCredits += credits;
+        
+        coverData.push([
           category,
-          transactions.length,
-          categoryAmount.toFixed(2),
-          `${percentage}%`
+          categoryTrans.length,
+          formatCurrency(debits),
+          formatCurrency(credits),
+          formatCurrency(credits - debits)
         ]);
       }
     });
 
     // Add uncategorized summary
-    if (uncategorizedData.length > 0) {
-      const uncategorizedAmount = uncategorizedData.reduce((sum, t) => sum + t.amount, 0);
-      const percentage = totalTransactionAmount > 0 ? ((uncategorizedAmount / totalTransactionAmount) * 100).toFixed(1) : '0.0';
-      summaryData.push([
-        'Uncategorized',
-        uncategorizedData.length,
-        uncategorizedAmount.toFixed(2),
-        `${percentage}%`
+    const fileUncategorized = uncategorizedData.filter(t => t.sourceFile === fileName);
+    if (fileUncategorized.length > 0) {
+      const uncatDebits = fileUncategorized.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+      const uncatCredits = fileUncategorized.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+      totalDebits += uncatDebits;
+      totalCredits += uncatCredits;
+      
+      coverData.push([
+        '⚠️ UNCATEGORIZED',
+        fileUncategorized.length,
+        formatCurrency(uncatDebits),
+        formatCurrency(uncatCredits),
+        formatCurrency(uncatCredits - uncatDebits)
       ]);
     }
 
-    summaryData.push([]);
-    summaryData.push(['DOCUMENT BREAKDOWN:']);
-    summaryData.push(['File Name', 'Period', 'Opening Balance', 'Closing Balance', 'Transactions', 'Success Rate']);
+    // Add totals
+    coverData.push(['']);
+    coverData.push([
+      'TOTALS',
+      fileStat.total || 0,
+      formatCurrency(totalDebits),
+      formatCurrency(totalCredits),
+      formatCurrency(totalCredits - totalDebits)
+    ]);
 
-    // Add individual document summaries
-    Object.entries(fileStats).forEach(([fileName, fileData]) => {
-      const metadata = statementMetadata[fileName] || {};
-      
-      if (fileData.status === 'success') {
-        summaryData.push([
-          fileName,
-          metadata.statementPeriod || 'Not specified',
-          `MUR ${(metadata.openingBalance || 0).toLocaleString()}`,
-          `MUR ${(metadata.closingBalance || 0).toLocaleString()}`,
-          fileData.total || 0,
-          `${fileData.successRate || 0}%`
-        ]);
-      }
+    const coverSheet = XLSX.utils.aoa_to_sheet(coverData);
+    
+    // Apply column widths
+    coverSheet['!cols'] = [
+      { width: 30 },
+      { width: 20 },
+      { width: 20 },
+      { width: 20 },
+      { width: 20 }
+    ];
+    
+    XLSX.utils.book_append_sheet(wb, coverSheet, "Summary");
+
+    // 2. ALL TRANSACTIONS SHEET (chronological order)
+    const allTransData = [
+      ['ALL TRANSACTIONS - CHRONOLOGICAL ORDER'],
+      [''],
+      ['Transaction Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Category', 'Type']
+    ];
+
+    // Combine all transactions for this file
+    const allFileTrans = [];
+    Object.entries(results).forEach(([category, trans]) => {
+      trans.filter(t => t.sourceFile === fileName).forEach(t => {
+        allFileTrans.push({ ...t, category });
+      });
+    });
+    fileUncategorized.forEach(t => {
+      allFileTrans.push({ ...t, category: 'Uncategorized' });
     });
 
-    summaryData.push([]);
-    summaryData.push(['NAVIGATION GUIDE:']);
-    summaryData.push(['• Summary: This overview sheet']);
-    summaryData.push(['• Category Sheets: Each category has its own sheet with all transactions']);
-    summaryData.push(['• Uncategorized: Transactions that need manual review']);
-    summaryData.push(['• Use the sheet tabs at the bottom to navigate between categories']);
+    // Sort by date
+    allFileTrans.sort((a, b) => {
+      const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+      const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+      return dateA - dateB;
+    });
 
-    const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryData);
-    XLSX.utils.book_append_sheet(wb, summaryWorksheet, "Summary");
+    allFileTrans.forEach(transaction => {
+      allTransData.push([
+        formatDate(transaction.transactionDate),
+        formatDate(transaction.valueDate),
+        transaction.description,
+        transaction.isDebit ? transaction.amount : '',
+        !transaction.isDebit ? transaction.amount : '',
+        transaction.balance,
+        transaction.category,
+        transaction.isDebit ? 'Debit' : 'Credit'
+      ]);
+    });
 
-    // CREATE SEPARATE SHEET FOR EACH CATEGORY
+    const allTransSheet = XLSX.utils.aoa_to_sheet(allTransData);
+    allTransSheet['!cols'] = [
+      { width: 12 },
+      { width: 12 },
+      { width: 40 },
+      { width: 15 },
+      { width: 15 },
+      { width: 15 },
+      { width: 20 },
+      { width: 10 }
+    ];
+    
+    XLSX.utils.book_append_sheet(wb, allTransSheet, "All Transactions");
+
+    // 3. CATEGORY SHEETS
     Object.entries(results).forEach(([category, transactions]) => {
-      if (transactions.length > 0) {
-        const categoryData = [
-          [`${category.toUpperCase()} - ALL TRANSACTIONS`],
-          ['Category:', category],
-          ['Total Transactions:', transactions.length],
-          ['Total Amount:', `MUR ${transactions.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}`],
-          ['Average Amount:', `MUR ${(transactions.reduce((sum, t) => sum + t.amount, 0) / transactions.length).toLocaleString()}`],
-          [], // Empty row
-          ['BREAKDOWN BY DOCUMENT:']
-        ];
+      const categoryTrans = transactions.filter(t => t.sourceFile === fileName);
+      if (categoryTrans.length === 0) return;
 
-        // Add document breakdown for this category
-        const documentBreakdown = {};
-        transactions.forEach(t => {
-          if (!documentBreakdown[t.sourceFile]) {
-            documentBreakdown[t.sourceFile] = { count: 0, amount: 0 };
-          }
-          documentBreakdown[t.sourceFile].count++;
-          documentBreakdown[t.sourceFile].amount += t.amount;
-        });
-
-        categoryData.push(['Document', 'Count', 'Amount (MUR)']);
-        Object.entries(documentBreakdown).forEach(([fileName, data]) => {
-          categoryData.push([fileName, data.count, data.amount.toFixed(2)]);
-        });
-
-        categoryData.push([]);
-        categoryData.push(['DETAILED TRANSACTIONS:']);
-        categoryData.push(['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Type', 'Source File', 'Confidence']);
-
-        // Sort transactions by date
-        transactions
-          .sort((a, b) => new Date(a.transactionDate) - new Date(b.transactionDate))
-          .forEach(transaction => {
-            categoryData.push([
-              transaction.transactionDate,
-              transaction.valueDate,
-              transaction.description,
-              transaction.amount.toFixed(2),
-              transaction.balance.toFixed(2),
-              transaction.isDebit ? 'Debit' : 'Credit',
-              transaction.sourceFile,
-              transaction.confidence ? (transaction.confidence * 100).toFixed(1) + '%' : 'N/A'
-            ]);
-          });
-
-        const categoryWorksheet = XLSX.utils.aoa_to_sheet(categoryData);
-        // Clean sheet name for Excel compatibility and limit to 31 characters
-        const sheetName = category.replace(/[\/\\*?[\]]/g, '_').substring(0, 31);
-        XLSX.utils.book_append_sheet(wb, categoryWorksheet, sheetName);
-      }
-    });
-
-    // CREATE UNCATEGORIZED SHEET
-    if (uncategorizedData.length > 0) {
-      const uncategorizedSheetData = [
-        ['UNCATEGORIZED TRANSACTIONS - REQUIRES MANUAL REVIEW'],
-        ['⚠️ ATTENTION: These transactions could not be automatically categorized'],
-        ['Total Uncategorized:', uncategorizedData.length],
-        ['Total Amount:', `MUR ${uncategorizedData.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}`],
-        [], // Empty row
-        ['COMMON REASONS FOR NON-CATEGORIZATION:'],
-        ['• New transaction types not in the mapping rules'],
-        ['• Unusual transaction descriptions'],
-        ['• Formatting variations in bank data'],
-        ['• Missing or incomplete transaction details'],
-        [], // Empty row
-        ['BREAKDOWN BY DOCUMENT:']
+      const categoryData = [
+        [`${category.toUpperCase()} TRANSACTIONS`],
+        [''],
+        ['Summary:'],
+        [`Total Transactions: ${categoryTrans.length}`],
+        [`Total Debits: ${formatCurrency(categoryTrans.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
+        [`Total Credits: ${formatCurrency(categoryTrans.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
+        [''],
+        ['Transaction Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Confidence']
       ];
 
-      // Add document breakdown for uncategorized
-      const uncategorizedByDoc = {};
-      uncategorizedData.forEach(t => {
-        if (!uncategorizedByDoc[t.sourceFile]) {
-          uncategorizedByDoc[t.sourceFile] = { count: 0, amount: 0 };
-        }
-        uncategorizedByDoc[t.sourceFile].count++;
-        uncategorizedByDoc[t.sourceFile].amount += t.amount;
-      });
-
-      uncategorizedSheetData.push(['Document', 'Count', 'Amount (MUR)']);
-      Object.entries(uncategorizedByDoc).forEach(([fileName, data]) => {
-        uncategorizedSheetData.push([fileName, data.count, data.amount.toFixed(2)]);
-      });
-
-      uncategorizedSheetData.push([]);
-      uncategorizedSheetData.push(['DETAILED UNCATEGORIZED TRANSACTIONS:']);
-      uncategorizedSheetData.push(['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Type', 'Source File', 'Reason']);
-
-      uncategorizedData
-        .sort((a, b) => new Date(a.transactionDate) - new Date(b.transactionDate))
+      categoryTrans
+        .sort((a, b) => {
+          const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+          const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+          return dateA - dateB;
+        })
         .forEach(transaction => {
-          uncategorizedSheetData.push([
-            transaction.transactionDate,
-            transaction.valueDate,
+          categoryData.push([
+            formatDate(transaction.transactionDate),
+            formatDate(transaction.valueDate),
             transaction.description,
-            transaction.amount.toFixed(2),
-            transaction.balance.toFixed(2),
-            transaction.isDebit ? 'Debit' : 'Credit',
-            transaction.sourceFile,
-            transaction.reason || 'No pattern match found'
+            transaction.isDebit ? transaction.amount : '',
+            !transaction.isDebit ? transaction.amount : '',
+            transaction.balance,
+            transaction.confidence ? `${(transaction.confidence * 100).toFixed(0)}%` : 'N/A'
           ]);
         });
 
-      const uncategorizedWorksheet = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
-      XLSX.utils.book_append_sheet(wb, uncategorizedWorksheet, "Uncategorized");
+      const categorySheet = XLSX.utils.aoa_to_sheet(categoryData);
+      categorySheet['!cols'] = [
+        { width: 12 },
+        { width: 12 },
+        { width: 40 },
+        { width: 15 },
+        { width: 15 },
+        { width: 15 },
+        { width: 12 }
+      ];
+
+      const sheetName = category.replace(/[\/\\*?[\]]/g, '_').substring(0, 31);
+      XLSX.utils.book_append_sheet(wb, categorySheet, sheetName);
+    });
+
+    // 4. UNCATEGORIZED SHEET (critical for review)
+    if (fileUncategorized.length > 0) {
+      const uncategorizedSheetData = [
+        ['⚠️ UNCATEGORIZED TRANSACTIONS - REQUIRES MANUAL REVIEW'],
+        [''],
+        ['These transactions could not be automatically categorized and need manual classification.'],
+        ['Please review each transaction and assign appropriate categories.'],
+        [''],
+        [`Total Uncategorized: ${fileUncategorized.length}`],
+        [`Total Amount: ${formatCurrency(fileUncategorized.reduce((sum, t) => sum + t.amount, 0))}`],
+        [''],
+        ['Transaction Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Suggested Category', 'Notes']
+      ];
+
+      fileUncategorized
+        .sort((a, b) => {
+          const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+          const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+          return dateA - dateB;
+        })
+        .forEach(transaction => {
+          uncategorizedSheetData.push([
+            formatDate(transaction.transactionDate),
+            formatDate(transaction.valueDate),
+            transaction.description,
+            transaction.isDebit ? transaction.amount : '',
+            !transaction.isDebit ? transaction.amount : '',
+            transaction.balance,
+            '[Manual Entry Required]',
+            transaction.reason || 'No matching pattern found'
+          ]);
+        });
+
+      const uncategorizedSheet = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
+      uncategorizedSheet['!cols'] = [
+        { width: 12 },
+        { width: 12 },
+        { width: 40 },
+        { width: 15 },
+        { width: 15 },
+        { width: 15 },
+        { width: 20 },
+        { width: 30 }
+      ];
+
+      XLSX.utils.book_append_sheet(wb, uncategorizedSheet, "⚠️ UNCATEGORIZED");
     }
 
-    // CREATE ALL TRANSACTIONS SHEET (for reference)
-    const allTransactionData = [
-      ['ALL TRANSACTIONS - CONSOLIDATED VIEW'],
-      ['This sheet contains every transaction from all documents for reference'],
-      ['Total Transactions:', allTransactions.length],
-      ['Total Amount:', `MUR ${allTransactions.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}`],
-      [], // Empty row
-      ['Date', 'Value Date', 'Description', 'Amount', 'Balance', 'Category', 'Type', 'Source File']
+    // Generate filename and download
+    const cleanFileName = fileName.replace(/\.[^/.]+$/, "").replace(/[\/\\*?[\]]/g, '_');
+    const outputFileName = `${cleanFileName}_MCB_Analysis_${timestamp}.xlsx`;
+    
+    XLSX.writeFile(wb, outputFileName);
+    filesGenerated++;
+    addLog(`✅ Generated: ${outputFileName}`, 'success');
+  }
+  
+  addLog(`✅ Successfully generated ${filesGenerated} Excel file(s)`, 'success');
+};
+
+// Generate combined Excel file with all documents
+const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats, statementMetadata, timestamp, addLog) => {
+  const wb = XLSX.utils.book_new();
+  
+  // Calculate consolidated totals
+  let consolidatedOpeningBalance = 0;
+  let consolidatedClosingBalance = 0;
+  let totalDocuments = 0;
+  
+  Object.entries(statementMetadata).forEach(([fileName, metadata]) => {
+    if (fileStats[fileName]?.status === 'success') {
+      consolidatedOpeningBalance += metadata.openingBalance || 0;
+      consolidatedClosingBalance += metadata.closingBalance || 0;
+      totalDocuments++;
+    }
+  });
+
+  // 1. CONSOLIDATED SUMMARY SHEET
+  const summaryData = [
+    ['MCB BANK STATEMENTS - CONSOLIDATED ANALYSIS'],
+    [''],
+    ['PROCESSING INFORMATION'],
+    ['Generated Date:', new Date().toLocaleString()],
+    ['Documents Processed:', totalDocuments],
+    ['Export Mode:', 'Combined (All documents in one file)'],
+    [''],
+    ['CONSOLIDATED BALANCE SUMMARY'],
+    ['Total Opening Balance (All Documents):', formatCurrency(consolidatedOpeningBalance)],
+    ['Total Closing Balance (All Documents):', formatCurrency(consolidatedClosingBalance)],
+    ['Net Change Across All Documents:', formatCurrency(consolidatedClosingBalance - consolidatedOpeningBalance)],
+    [''],
+    ['DOCUMENT DETAILS'],
+    ['Document Name', 'Statement Period', 'Opening Balance', 'Closing Balance', 'Net Change', 'Transactions', 'Success Rate']
+  ];
+
+  // Add individual document details
+  Object.entries(fileStats).forEach(([fileName, fileStat]) => {
+    if (fileStat.status === 'success') {
+      const metadata = statementMetadata[fileName] || {};
+      summaryData.push([
+        fileName,
+        metadata.statementPeriod || 'Not specified',
+        formatCurrency(metadata.openingBalance || 0),
+        formatCurrency(metadata.closingBalance || 0),
+        formatCurrency((metadata.closingBalance || 0) - (metadata.openingBalance || 0)),
+        fileStat.total || 0,
+        `${fileStat.successRate || 0}%`
+      ]);
+    }
+  });
+
+  // Add category summary
+  summaryData.push(['']);
+  summaryData.push(['CATEGORY ANALYSIS (ALL DOCUMENTS)']);
+  summaryData.push(['Category', 'Transaction Count', 'Total Debits', 'Total Credits', 'Net Amount', '% of Total']);
+
+  const allTransactions = Object.values(results).flat().concat(uncategorizedData);
+  const totalAmount = allTransactions.reduce((sum, t) => sum + t.amount, 0);
+
+  Object.entries(results).forEach(([category, transactions]) => {
+    if (transactions.length > 0) {
+      const debits = transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+      const credits = transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+      const percentage = totalAmount > 0 ? ((debits + credits) / totalAmount * 100).toFixed(1) : '0.0';
+      
+      summaryData.push([
+        category,
+        transactions.length,
+        formatCurrency(debits),
+        formatCurrency(credits),
+        formatCurrency(credits - debits),
+        `${percentage}%`
+      ]);
+    }
+  });
+
+  // Add uncategorized summary
+  if (uncategorizedData.length > 0) {
+    const uncatDebits = uncategorizedData.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+    const uncatCredits = uncategorizedData.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+    const percentage = totalAmount > 0 ? ((uncatDebits + uncatCredits) / totalAmount * 100).toFixed(1) : '0.0';
+    
+    summaryData.push([
+      '⚠️ UNCATEGORIZED',
+      uncategorizedData.length,
+      formatCurrency(uncatDebits),
+      formatCurrency(uncatCredits),
+      formatCurrency(uncatCredits - uncatDebits),
+      `${percentage}%`
+    ]);
+  }
+
+  const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+  summarySheet['!cols'] = [
+    { width: 35 },
+    { width: 20 },
+    { width: 20 },
+    { width: 20 },
+    { width: 20 },
+    { width: 15 }
+  ];
+  
+  XLSX.utils.book_append_sheet(wb, summarySheet, "Summary");
+
+  // 2. ALL TRANSACTIONS SHEET (all documents combined)
+  const allTransData = [
+    ['ALL TRANSACTIONS - CONSOLIDATED VIEW'],
+    [''],
+    ['Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Category', 'Type', 'Source Document']
+  ];
+
+  allTransactions
+    .sort((a, b) => {
+      const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+      const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+      return dateA - dateB;
+    })
+    .forEach(transaction => {
+      allTransData.push([
+        formatDate(transaction.transactionDate),
+        formatDate(transaction.valueDate),
+        transaction.description,
+        transaction.isDebit ? transaction.amount : '',
+        !transaction.isDebit ? transaction.amount : '',
+        transaction.balance,
+        transaction.category || 'Uncategorized',
+        transaction.isDebit ? 'Debit' : 'Credit',
+        transaction.sourceFile
+      ]);
+    });
+
+  const allTransSheet = XLSX.utils.aoa_to_sheet(allTransData);
+  allTransSheet['!cols'] = [
+    { width: 12 },
+    { width: 12 },
+    { width: 40 },
+    { width: 15 },
+    { width: 15 },
+    { width: 15 },
+    { width: 20 },
+    { width: 10 },
+    { width: 30 }
+  ];
+  
+  XLSX.utils.book_append_sheet(wb, allTransSheet, "All Transactions");
+
+  // 3. CATEGORY SHEETS (combined from all documents)
+  Object.entries(results).forEach(([category, transactions]) => {
+    if (transactions.length === 0) return;
+
+    const categoryData = [
+      [`${category.toUpperCase()} - ALL DOCUMENTS`],
+      [''],
+      ['Category Summary:'],
+      [`Total Transactions: ${transactions.length}`],
+      [`Total Debits: ${formatCurrency(transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
+      [`Total Credits: ${formatCurrency(transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
+      [''],
+      ['BREAKDOWN BY DOCUMENT:'],
+      ['Document', 'Count', 'Debits', 'Credits', 'Net']
     ];
 
-    allTransactions
-      .sort((a, b) => new Date(a.transactionDate) - new Date(b.transactionDate))
+    // Group by document
+    const docBreakdown = {};
+    transactions.forEach(t => {
+      if (!docBreakdown[t.sourceFile]) {
+        docBreakdown[t.sourceFile] = { count: 0, debits: 0, credits: 0 };
+      }
+      docBreakdown[t.sourceFile].count++;
+      if (t.isDebit) {
+        docBreakdown[t.sourceFile].debits += t.amount;
+      } else {
+        docBreakdown[t.sourceFile].credits += t.amount;
+      }
+    });
+
+    Object.entries(docBreakdown).forEach(([doc, data]) => {
+      categoryData.push([
+        doc,
+        data.count,
+        formatCurrency(data.debits),
+        formatCurrency(data.credits),
+        formatCurrency(data.credits - data.debits)
+      ]);
+    });
+
+    categoryData.push(['']);
+    categoryData.push(['TRANSACTION DETAILS:']);
+    categoryData.push(['Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Document', 'Confidence']);
+
+    transactions
+      .sort((a, b) => {
+        const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+        const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+        return dateA - dateB;
+      })
       .forEach(transaction => {
-        allTransactionData.push([
-          transaction.transactionDate,
-          transaction.valueDate,
+        categoryData.push([
+          formatDate(transaction.transactionDate),
+          formatDate(transaction.valueDate),
           transaction.description,
-          transaction.amount.toFixed(2),
-          transaction.balance.toFixed(2),
-          transaction.category || 'Uncategorized',
-          transaction.isDebit ? 'Debit' : 'Credit',
-          transaction.sourceFile
+          transaction.isDebit ? transaction.amount : '',
+          !transaction.isDebit ? transaction.amount : '',
+          transaction.balance,
+          transaction.sourceFile,
+          transaction.confidence ? `${(transaction.confidence * 100).toFixed(0)}%` : 'N/A'
         ]);
       });
 
-    const allTransactionsWorksheet = XLSX.utils.aoa_to_sheet(allTransactionData);
-    XLSX.utils.book_append_sheet(wb, allTransactionsWorksheet, "All Transactions");
+    const categorySheet = XLSX.utils.aoa_to_sheet(categoryData);
+    categorySheet['!cols'] = [
+      { width: 12 },
+      { width: 12 },
+      { width: 40 },
+      { width: 15 },
+      { width: 15 },
+      { width: 15 },
+      { width: 30 },
+      { width: 12 }
+    ];
 
-    // Download the combined workbook
-    const fileName = `MCB_Statements_Analysis_${timestamp}.xlsx`;
-    downloadExcelFile(wb, fileName);
-    
-    const categoryCount = Object.keys(results).filter(category => results[category].length > 0).length;
-    const totalSheets = 2 + categoryCount + (uncategorizedData.length > 0 ? 1 : 0) + 1; // Summary + Categories + Uncategorized + All Transactions
-    addLog(`Combined Excel file created with ${totalSheets} sheets: Summary + ${categoryCount} Category sheets + ${uncategorizedData.length > 0 ? 'Uncategorized + ' : ''}All Transactions`, 'success');
+    const sheetName = category.replace(/[\/\\*?[\]]/g, '_').substring(0, 31);
+    XLSX.utils.book_append_sheet(wb, categorySheet, sheetName);
+  });
+
+  // 4. UNCATEGORIZED SHEET
+  if (uncategorizedData.length > 0) {
+    const uncategorizedSheetData = [
+      ['⚠️ UNCATEGORIZED TRANSACTIONS - REQUIRE MANUAL REVIEW'],
+      [''],
+      ['ATTENTION: These transactions could not be automatically categorized.'],
+      ['Please review each transaction and assign appropriate categories.'],
+      [''],
+      [`Total Uncategorized: ${uncategorizedData.length}`],
+      [`Total Amount: ${formatCurrency(uncategorizedData.reduce((sum, t) => sum + t.amount, 0))}`],
+      [''],
+      ['BREAKDOWN BY DOCUMENT:'],
+      ['Document', 'Count', 'Amount']
+    ];
+
+    // Group uncategorized by document
+    const uncatByDoc = {};
+    uncategorizedData.forEach(t => {
+      if (!uncatByDoc[t.sourceFile]) {
+        uncatByDoc[t.sourceFile] = { count: 0, amount: 0 };
+      }
+      uncatByDoc[t.sourceFile].count++;
+      uncatByDoc[t.sourceFile].amount += t.amount;
+    });
+
+    Object.entries(uncatByDoc).forEach(([doc, data]) => {
+      uncategorizedSheetData.push([doc, data.count, formatCurrency(data.amount)]);
+    });
+
+    uncategorizedSheetData.push(['']);
+    uncategorizedSheetData.push(['TRANSACTION DETAILS:']);
+    uncategorizedSheetData.push(['Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Document', 'Suggested Category', 'Notes']);
+
+    uncategorizedData
+      .sort((a, b) => {
+        const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+        const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+        return dateA - dateB;
+      })
+      .forEach(transaction => {
+        uncategorizedSheetData.push([
+          formatDate(transaction.transactionDate),
+          formatDate(transaction.valueDate),
+          transaction.description,
+          transaction.isDebit ? transaction.amount : '',
+          !transaction.isDebit ? transaction.amount : '',
+          transaction.balance,
+          transaction.sourceFile,
+          '[Manual Entry Required]',
+          transaction.reason || 'No matching pattern'
+        ]);
+      });
+
+    const uncategorizedSheet = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
+    uncategorizedSheet['!cols'] = [
+      { width: 12 },
+      { width: 12 },
+      { width: 40 },
+      { width: 15 },
+      { width: 15 },
+      { width: 15 },
+      { width: 30 },
+      { width: 20 },
+      { width: 25 }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, uncategorizedSheet, "⚠️ UNCATEGORIZED");
   }
-};
 
-// Helper function to download Excel file
-const downloadExcelFile = (workbook, filename) => {
-  const excelBuffer = window.XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // 5. BALANCE TRACKING SHEET
+  const balanceData = [
+    ['BALANCE TRACKING & RECONCILIATION'],
+    [''],
+    ['DOCUMENT BALANCES'],
+    ['Document', 'Opening Balance', 'Total Debits', 'Total Credits', 'Calculated Closing', 'Stated Closing', 'Difference']
+  ];
+
+  Object.entries(statementMetadata).forEach(([fileName, metadata]) => {
+    if (fileStats[fileName]?.status === 'success') {
+      // Calculate debits and credits for this file
+      let fileDebits = 0;
+      let fileCredits = 0;
+      
+      Object.values(results).forEach(transactions => {
+        transactions.filter(t => t.sourceFile === fileName).forEach(t => {
+          if (t.isDebit) fileDebits += t.amount;
+          else fileCredits += t.amount;
+        });
+      });
+      
+      uncategorizedData.filter(t => t.sourceFile === fileName).forEach(t => {
+        if (t.isDebit) fileDebits += t.amount;
+        else fileCredits += t.amount;
+      });
+      
+      const calculatedClosing = (metadata.openingBalance || 0) - fileDebits + fileCredits;
+      const difference = (metadata.closingBalance || 0) - calculatedClosing;
+      
+      balanceData.push([
+        fileName,
+        formatCurrency(metadata.openingBalance || 0),
+        formatCurrency(fileDebits),
+        formatCurrency(fileCredits),
+        formatCurrency(calculatedClosing),
+        formatCurrency(metadata.closingBalance || 0),
+        formatCurrency(difference)
+      ]);
+    }
+  });
+
+  // Add consolidated totals
+  balanceData.push(['']);
+  balanceData.push([
+    'CONSOLIDATED TOTALS',
+    formatCurrency(consolidatedOpeningBalance),
+    '', // Will calculate
+    '', // Will calculate
+    '', // Will calculate
+    formatCurrency(consolidatedClosingBalance),
+    ''
+  ]);
+
+  const balanceSheet = XLSX.utils.aoa_to_sheet(balanceData);
+  balanceSheet['!cols'] = [
+    { width: 35 },
+    { width: 20 },
+    { width: 20 },
+    { width: 20 },
+    { width: 20 },
+    { width: 20 },
+    { width: 15 }
+  ];
+  
+  XLSX.utils.book_append_sheet(wb, balanceSheet, "Balance Tracking");
+
+  // Download the file
+  const outputFileName = `MCB_Consolidated_Analysis_${timestamp}.xlsx`;
+  XLSX.writeFile(wb, outputFileName);
+  
+  addLog(`✅ Generated consolidated Excel: ${outputFileName}`, 'success');
+  addLog(`📊 Included ${Object.keys(results).filter(cat => results[cat].length > 0).length} categories + ${uncategorizedData.length > 0 ? '1 uncategorized sheet' : 'no uncategorized'}`, 'success');
 };
