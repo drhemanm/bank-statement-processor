@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, Download, AlertCircle, CheckCircle, Loader2, Eye, Settings, Zap } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle, Loader2, Eye, Settings, Zap } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
 import EnhancedResultsDisplay from './components/EnhancedResultsDisplay';
@@ -21,7 +21,7 @@ const BankStatementProcessor = () => {
   const [exportMode, setExportMode] = useState('combined');
   const [documentCounters, setDocumentCounters] = useState({});
   const [showLogs, setShowLogs] = useState(false);
-  const [aiEnhancementEnabled, setAiEnhancementEnabled] = useState(true);
+  const [aiEnhancementEnabled, setAiEnhancementEnabled] = useState(false);
   const [apiStatus, setApiStatus] = useState('unknown');
 
   // MCB-specific categorization mapping based on your Excel mapping
@@ -39,8 +39,8 @@ const BankStatementProcessor = () => {
       patterns: [/standing\s+order.*consultancy\s+fee.*yazak\s+services/i]
     },
     'Salary': {
-      keywords: ['juicepro transfer', 'miss wadashah sahaboolea'],
-      patterns: [/juicepro\s+transfer.*miss\s+wadashah\s+sahaboolea/i]
+      keywords: ['juicepro transfer', 'miss wadashah sahaboolea', 'staff salary'],
+      patterns: [/juicepro\s+transfer.*miss\s+wadashah\s+sahaboolea/i, /staff\s+salary/i]
     },
     'Purchase/Payment/Expense': {
       keywords: ['juicepro transfer', 'pastry pro ltd', 'merchant instant payment', 'juice payment'],
@@ -58,8 +58,8 @@ const BankStatementProcessor = () => {
       ]
     },
     'Cash withdrawal': {
-      keywords: ['atm cash withdrawal'],
-      patterns: [/atm\s+cash\s+withdrawal/i]
+      keywords: ['atm cash withdrawal', 'cash cheque'],
+      patterns: [/atm\s+cash\s+withdrawal/i, /cash\s+cheque/i]
     },
     'Cash Deposit': {
       keywords: ['atm cash deposit', 'cash deposit'],
@@ -74,39 +74,38 @@ const BankStatementProcessor = () => {
       ]
     },
     'Transfer': {
-      keywords: ['interbank transfer', 'juicepro transfer', 'cash cheque'],
+      keywords: ['interbank transfer', 'juicepro transfer'],
       patterns: [
         /interbank\s+transfer/i,
-        /juicepro\s+transfer/i,
-        /cash\s+cheque/i
+        /juicepro\s+transfer/i
       ]
     }
   };
 
   // Check API status on component mount
   useEffect(() => {
-    checkApiStatus();
-  }, []);
-
-  const checkApiStatus = async () => {
-    try {
-      const response = await fetch('/api/debug');
-      const data = await response.json();
-      
-      if (data.apiTestResult?.success) {
-        setApiStatus('working');
-        addLog('Claude AI enhancement is available and working', 'success');
-      } else {
+    const checkStatus = async () => {
+      try {
+        const response = await fetch('/api/debug');
+        const data = await response.json();
+        
+        if (data.apiTestResult?.status === 'SUCCESS') {
+          setApiStatus('working');
+          setAiEnhancementEnabled(true);
+          addLog('Claude AI enhancement is available and working', 'success');
+        } else {
+          setApiStatus('error');
+          addLog(`AI API issue: ${data.apiTestResult?.error || 'Unknown error'}`, 'warning');
+          setAiEnhancementEnabled(false);
+        }
+      } catch (error) {
         setApiStatus('error');
-        addLog(`AI API issue: ${data.apiTestResult?.error || 'Unknown error'}`, 'warning');
+        addLog('Could not verify AI API status', 'warning');
         setAiEnhancementEnabled(false);
       }
-    } catch (error) {
-      setApiStatus('error');
-      addLog('Could not verify AI API status', 'warning');
-      setAiEnhancementEnabled(false);
-    }
-  };
+    };
+    checkStatus();
+  }, []);
 
   // Enhanced log function with categorization
   const addLog = (message, type = 'info', details = null) => {
@@ -304,7 +303,7 @@ const BankStatementProcessor = () => {
           }
           
           // Method 3: Enhance text with AI if we have content
-          if (pageText && pageText.trim().length > 20 && extractionMethod !== 'ai-vision') {
+          if (pageText && pageText.trim().length > 20 && extractionMethod !== 'ai-vision' && aiEnhancementEnabled) {
             try {
               const enhancedText = await enhanceOCRWithClaude(pageText, null, false, pageNum);
               if (enhancedText && enhancedText !== pageText) {
@@ -379,25 +378,23 @@ const BankStatementProcessor = () => {
 
     addLog(`DEBUG: Looking for balances in text of length ${text.length}`, 'info');
 
-    // MCB-specific extraction patterns - FIXED
+    // MCB-specific extraction patterns
     const patterns = {
       accountNumber: [
-        /Account\s+Number\s*:\s*(\d+)/i,
-        /(\d{12})/
+        /Account\s+Number[:\s]+(\d+)/i,
+        /(\d{12})\s+MUR/
       ],
       iban: [
-        /IBAN:\s*(MU\d{2}[A-Z0-9]+)/i
+        /IBAN[:\s]+(MU\d{2}[A-Z0-9]+)/i
       ],
       statementPeriod: [
         /From\s+(\d{2}\/\d{2}\/\d{4})\s+to\s+(\d{2}\/\d{2}\/\d{4})/i
       ],
       openingBalance: [
-        /Opening\s+Balance\s+([\d,]+\.?\d*)/i,
-        /Balance\s+([\d,]+\.?\d*)/i  // More flexible pattern
+        /Opening\s+Balance\s+([\d,]+\.?\d*)/i
       ],
       closingBalance: [
-        /Closing\s+Balance\s+([\d,]+\.?\d*)/i,
-        /(?:Closing|Final)\s+Balance\s+([\d,]+\.?\d*)/i
+        /Closing\s+Balance\s+([\d,]+\.?\d*)/i
       ]
     };
 
@@ -426,150 +423,140 @@ const BankStatementProcessor = () => {
               metadata[field] = parseFloat(match[1].replace(/,/g, '')) || 0;
               addLog(`Found ${field}: ${match[1]} (parsed as ${metadata[field]})`, 'info');
               break;
+            default:
+              break;
           }
           break;
         }
       }
     });
 
-    // If we didn't find opening/closing balance, look for specific MCB patterns
-    if (metadata.openingBalance === 0) {
-      // Look for "Opening Balance 7,096.39" pattern specifically
-      const openingMatch = text.match(/Opening\s+Balance\s+([\d,]+\.?\d*)/i);
-      if (openingMatch) {
-        metadata.openingBalance = parseFloat(openingMatch[1].replace(/,/g, '')) || 0;
-        addLog(`Found opening balance via specific pattern: ${openingMatch[1]}`, 'success');
-      } else {
-        addLog(`DEBUG: Could not find opening balance. Sample text: ${text.substring(0, 500)}...`, 'warning');
-      }
-    }
-
-    if (metadata.closingBalance === 0) {
-      // Look for "Closing Balance 105,373.39" pattern specifically  
-      const closingMatch = text.match(/Closing\s+Balance\s+([\d,]+\.?\d*)/i);
-      if (closingMatch) {
-        metadata.closingBalance = parseFloat(closingMatch[1].replace(/,/g, '')) || 0;
-        addLog(`Found closing balance via specific pattern: ${closingMatch[1]}`, 'success');
-      } else {
-        addLog(`DEBUG: Could not find closing balance. Looking for last balance in transactions...`, 'warning');
-        // Try to find the last balance mentioned in the text
-        const balanceMatches = text.match(/Balance\s+([\d,]+\.?\d*)/gi);
-        if (balanceMatches && balanceMatches.length > 0) {
-          const lastBalance = balanceMatches[balanceMatches.length - 1];
-          const balanceValue = parseFloat(lastBalance.match(/([\d,]+\.?\d*)/)[1].replace(/,/g, ''));
-          metadata.closingBalance = balanceValue;
-          addLog(`Using last balance found as closing balance: ${balanceValue}`, 'info');
-        }
-      }
-    }
-
     addLog(`Extracted metadata: Opening Balance MUR ${metadata.openingBalance.toLocaleString()}, Closing Balance MUR ${metadata.closingBalance.toLocaleString()}`, 'success');
     return metadata;
   };
 
-  // MCB-specific transaction extraction - FIXED PATTERNS
+  // FIXED MCB-specific transaction extraction
   const extractTransactions = async (text, fileName) => {
     const transactions = [];
-    const lines = text.split('\n').filter(line => line.trim());
-
-    addLog(`DEBUG: Starting transaction extraction from ${lines.length} lines`, 'info');
+    addLog(`DEBUG: Starting transaction extraction from text length ${text.length}`, 'info');
     
     let transactionCounter = 0;
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-      
-      // Skip empty lines and headers
-      if (!line || 
-          line.includes('TRANS DATE') || 
-          line.includes('TRANSACTION DETAILS') ||
-          line.includes('BALANCE') || 
-          line.includes('Current Account') ||
-          line.includes('Page :') ||
-          line.includes('MCB') ||
-          line.length < 20) {
-        continue;
-      }
+    // The MCB format appears to have transactions in continuous text
+    // Pattern: DATE DATE AMOUNT AMOUNT DESCRIPTION
+    // We need to extract these using regex
+    
+    // Clean up the text first - remove page headers and footers
+    let cleanedText = text
+      .replace(/Current Account STATEMENT.*?BALANCE/gs, '')
+      .replace(/The Mauritius Commercial Bank Ltd\..*?Website: www\.mcb\.mu/gs, '')
+      .replace(/For any change.*?accordingly\./gs, '')
+      .replace(/Page : \d+ of \d+/g, '');
 
-      // MCB transaction patterns - more flexible matching
-      // Pattern 1: DD/MM/YYYY DD/MM/YYYY Description Amount Balance (most common)
-      let match = line.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})$/);
+    // Find all transaction patterns
+    // Pattern: DD/MM/YYYY DD/MM/YYYY followed by amounts and description
+    const transactionRegex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})\s+([^0-9]+?)(?=\d{2}\/\d{2}\/\d{4}|Opening Balance|Closing Balance|$)/g;
+    
+    // Alternative pattern where description comes before amounts (for some transactions)
+    const altRegex = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+([A-Z][^0-9]+?)\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})/gi;
+    
+    let match;
+    const foundTransactions = [];
+    
+    // First try the main pattern
+    while ((match = transactionRegex.exec(cleanedText)) !== null) {
+      const [, transDate, valueDate, amount, balance, description] = match;
+      foundTransactions.push({
+        transactionDate: transDate,
+        valueDate: valueDate,
+        amount: parseFloat(amount.replace(/,/g, '')),
+        balance: parseFloat(balance.replace(/,/g, '')),
+        description: description.trim(),
+        position: match.index
+      });
+    }
+    
+    // If no transactions found, try alternative pattern
+    if (foundTransactions.length === 0) {
+      while ((match = altRegex.exec(cleanedText)) !== null) {
+        const [, transDate, valueDate, description, amount, balance] = match;
+        foundTransactions.push({
+          transactionDate: transDate,
+          valueDate: valueDate,
+          amount: parseFloat(amount.replace(/,/g, '')),
+          balance: parseFloat(balance.replace(/,/g, '')),
+          description: description.trim(),
+          position: match.index
+        });
+      }
+    }
+    
+    // Sort by position to maintain order
+    foundTransactions.sort((a, b) => a.position - b.position);
+    
+    // Process found transactions
+    for (const trans of foundTransactions) {
+      transactionCounter++;
       
-      if (!match) {
-        // Pattern 2: DD/MM/YYYY DD/MM/YYYY Description DEBIT_AMT CREDIT_AMT BALANCE
-        match = line.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d{2})?\s*([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})$/);
-        
-        if (match) {
-          // Adjust for debit/credit format
-          const [, transactionDate, valueDate, description, possibleDebit, possibleCredit, balance] = match;
+      // Determine if it's debit or credit based on description keywords
+      const description = trans.description.toLowerCase();
+      const isDebit = 
+        description.includes('payment') ||
+        description.includes('transfer') && !description.includes('interbank transfer') ||
+        description.includes('fee') ||
+        description.includes('cheque') ||
+        description.includes('refill') ||
+        description.includes('debit') ||
+        description.includes('withdrawal');
+      
+      const transaction = {
+        transactionDate: trans.transactionDate,
+        valueDate: trans.valueDate,
+        description: trans.description,
+        amount: trans.amount,
+        balance: trans.balance,
+        isDebit: isDebit,
+        sourceFile: fileName,
+        transactionId: `${fileName}_${transactionCounter}`,
+        rawLine: `${trans.transactionDate} ${trans.valueDate} ${trans.description} ${trans.amount} ${trans.balance}`
+      };
+      
+      transactions.push(transaction);
+      addLog(`Found transaction ${transactionCounter}: ${trans.description.substring(0, 50)}... MUR ${trans.amount.toLocaleString()}`, 'info');
+    }
+
+    // If still no transactions, try a more aggressive pattern matching
+    if (transactions.length === 0) {
+      addLog('Trying alternative extraction method...', 'info');
+      
+      // Look for lines that start with dates
+      const lines = text.split(/\n/);
+      for (const line of lines) {
+        const dateMatch = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/);
+        if (dateMatch) {
+          // Try to extract transaction from this line
+          const restOfLine = line.substring(dateMatch[0].length).trim();
+          const amountMatch = restOfLine.match(/([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})/);
           
-          // Determine if possibleCredit is actually the amount and balance
-          let debitAmount = 0, creditAmount = 0, balanceAmount = 0;
-          
-          if (possibleDebit && possibleCredit && balance) {
-            // Format: DATE DATE DESC DEBIT CREDIT BALANCE
-            debitAmount = parseFloat(possibleDebit.replace(/,/g, '')) || 0;
-            creditAmount = parseFloat(possibleCredit.replace(/,/g, '')) || 0;
-            balanceAmount = parseFloat(balance.replace(/,/g, '')) || 0;
-          } else {
-            // Format: DATE DATE DESC AMOUNT BALANCE
-            debitAmount = 0;
-            creditAmount = parseFloat(possibleCredit.replace(/,/g, '')) || 0;
-            balanceAmount = parseFloat(balance.replace(/,/g, '')) || 0;
-          }
-          
-          const amount = Math.max(debitAmount, creditAmount);
-          const isDebit = debitAmount > creditAmount;
-          
-          if (amount > 0) {
-            transactionCounter++;
-            const transaction = {
-              transactionDate: transactionDate,
-              valueDate: valueDate,
-              description: description.trim(),
-              amount,
-              balance: balanceAmount,
-              isDebit,
-              sourceFile: fileName,
-              transactionId: `${fileName}_${transactionCounter}`,
-              rawLine: line
-            };
+          if (amountMatch) {
+            const description = restOfLine.substring(0, restOfLine.indexOf(amountMatch[0])).trim() ||
+                             restOfLine.substring(amountMatch[0].length).trim();
             
-            transactions.push(transaction);
-            addLog(`Found transaction ${transactionCounter}: ${description.substring(0, 30)}... MUR ${amount.toLocaleString()}`, 'info');
+            if (description) {
+              transactionCounter++;
+              transactions.push({
+                transactionDate: dateMatch[1],
+                valueDate: dateMatch[2],
+                description: description,
+                amount: parseFloat(amountMatch[1].replace(/,/g, '')),
+                balance: parseFloat(amountMatch[2].replace(/,/g, '')),
+                isDebit: true,
+                sourceFile: fileName,
+                transactionId: `${fileName}_${transactionCounter}`,
+                rawLine: line
+              });
+            }
           }
-        }
-      } else {
-        // Pattern 1 matched
-        const [, transactionDate, valueDate, description, amount, balance] = match;
-        
-        const amountValue = parseFloat(amount.replace(/,/g, '')) || 0;
-        const balanceValue = parseFloat(balance.replace(/,/g, '')) || 0;
-        
-        if (amountValue > 0) {
-          transactionCounter++;
-          
-          // Determine if it's debit or credit by looking at balance change
-          // This is a simple heuristic - you might need to adjust based on your data
-          const isDebit = description.toLowerCase().includes('withdrawal') || 
-                          description.toLowerCase().includes('charge') ||
-                          description.toLowerCase().includes('fee') ||
-                          description.toLowerCase().includes('payment to');
-          
-          const transaction = {
-            transactionDate: transactionDate,
-            valueDate: valueDate,
-            description: description.trim(),
-            amount: amountValue,
-            balance: balanceValue,
-            isDebit,
-            sourceFile: fileName,
-            transactionId: `${fileName}_${transactionCounter}`,
-            rawLine: line
-          };
-          
-          transactions.push(transaction);
-          addLog(`Found transaction ${transactionCounter}: ${description.substring(0, 30)}... MUR ${amountValue.toLocaleString()}`, 'info');
         }
       }
     }
@@ -577,13 +564,8 @@ const BankStatementProcessor = () => {
     addLog(`Extracted ${transactions.length} transactions from ${fileName}`, transactions.length > 0 ? 'success' : 'warning');
     
     if (transactions.length === 0) {
-      // Debug: Show some sample lines to understand the format
-      addLog(`DEBUG: Sample lines from ${fileName}:`, 'warning');
-      lines.slice(0, 10).forEach((line, index) => {
-        if (line.trim() && line.includes('/')) {
-          addLog(`Line ${index}: ${line}`, 'warning');
-        }
-      });
+      addLog(`DEBUG: Could not extract transactions. Sample text:`, 'warning');
+      addLog(text.substring(0, 500), 'warning');
     }
     
     return transactions;
@@ -680,14 +662,16 @@ const BankStatementProcessor = () => {
           const transactions = await extractTransactions(extractedText, file.name);
           
           if (transactions.length === 0) {
-            addLog(`No transactions found in ${file.name}. This might indicate a parsing issue.`, 'warning');
+            addLog(`No transactions found in ${file.name}. Trying to show sample text for debugging.`, 'warning');
+            addLog(`Sample text: ${extractedText.substring(0, 500)}...`, 'info');
             newFileStats[file.name] = {
               status: 'warning',
               message: 'No transactions extracted',
               total: 0,
               categorized: 0,
               uncategorized: 0,
-              successRate: 0
+              successRate: 0,
+              metadata: metadata
             };
             continue;
           }
