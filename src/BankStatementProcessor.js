@@ -26,7 +26,7 @@ const BankStatementProcessor = () => {
   const [debugMode, setDebugMode] = useState(false);
   const [validationErrors, setValidationErrors] = useState({});
 
-  // MCB-specific categorization mapping
+  // Enhanced MCB-specific categorization mapping with all transaction types
   const categoryMapping = {
     'CSG/PRGF': {
       keywords: ['csg', 'prgf', 'direct debit scheme', 'mauritius revenue authority', 'mra'],
@@ -41,7 +41,7 @@ const BankStatementProcessor = () => {
       patterns: [/consultancy\s+fee/i, /professional.*service/i]
     },
     'Salary': {
-      keywords: ['salary', 'wage', 'payroll', 'staff payment'],
+      keywords: ['salary', 'wage', 'payroll', 'staff payment', 'salary credit'],
       patterns: [/salary/i, /wage\s+payment/i, /payroll/i]
     },
     'Purchase/Payment': {
@@ -57,16 +57,32 @@ const BankStatementProcessor = () => {
       patterns: [/atm.*withdrawal/i, /cash.*withdrawal/i, /retrait/i]
     },
     'Cash Deposit': {
-      keywords: ['deposit', 'cash deposit', 'versement'],
+      keywords: ['deposit', 'cash deposit', 'versement', 'credit deposit'],
       patterns: [/cash.*deposit/i, /deposit/i, /versement/i]
+    },
+    'Cash Cheque': {
+      keywords: ['cash cheque', 'cheque', 'check'],
+      patterns: [/cash\s+cheque/i, /cheque\s+\d+/i, /TT\d+/i]
     },
     'Bank Charges': {
       keywords: ['charge', 'fee', 'commission', 'frais', 'vat'],
       patterns: [/bank.*charge/i, /fee/i, /commission/i, /frais/i]
     },
+    'Refill/Top-up': {
+      keywords: ['refill amount', 'refill', 'top up', 'topup', 'recharge'],
+      patterns: [/refill\s+amount/i, /FT\d+.*\d+/i]
+    },
     'Transfer': {
-      keywords: ['transfer', 'virement', 'iban', 'swift'],
-      patterns: [/transfer/i, /virement/i, /iban/i]
+      keywords: ['transfer', 'virement', 'iban', 'swift', 'juicepro', 'interbank'],
+      patterns: [/transfer/i, /virement/i, /iban/i, /juicepro/i, /interbank/i]
+    },
+    'Transfer In': {
+      keywords: ['transfer in', 'incoming transfer', 'received transfer', 'credit transfer'],
+      patterns: [/transfer.*in/i, /incoming.*transfer/i, /credit.*transfer/i]
+    },
+    'Interest Earned': {
+      keywords: ['interest', 'interest earned', 'interest credit'],
+      patterns: [/interest.*earned/i, /interest.*credit/i]
     }
   };
 
@@ -334,7 +350,18 @@ const BankStatementProcessor = () => {
     return metadata;
   };
 
-  // Extract transactions with improved patterns
+  // Helper function to identify likely credit transactions
+  const isLikelyCredit = (description) => {
+    const creditIndicators = [
+      'deposit', 'credit', 'transfer in', 'received', 'interest', 
+      'salary', 'payment received', 'refund', 'reversal', 'dividend',
+      'incoming', 'collection', 'receipt', 'lodgement'
+    ];
+    
+    return creditIndicators.some(indicator => description.includes(indicator));
+  };
+
+  // Extract transactions with FIXED debit/credit detection
   const extractTransactions = (text, fileName) => {
     const transactions = [];
     let transactionCounter = 0;
@@ -344,25 +371,47 @@ const BankStatementProcessor = () => {
       .replace(/Page\s*:\s*\d+\s*of\s*\d+/gi, '')
       .replace(/The\s+Mauritius\s+Commercial\s+Bank.*?Website.*?mcb\.mu/gis, '');
 
+    // Extract opening balance as reference point
+    let currentBalance = 0;
+    const openingMatch = text.match(/opening\s*balance[:\s]*([\d,]+\.?\d*)/i) ||
+                         text.match(/balance\s*brought\s*forward[:\s]*([\d,]+\.?\d*)/i);
+    if (openingMatch) {
+      currentBalance = parseFloat(openingMatch[1].replace(/,/g, ''));
+      addLog(`Starting balance for transaction detection: MUR ${currentBalance.toLocaleString()}`, 'info');
+    } else if (statementMetadata[fileName]?.openingBalance) {
+      currentBalance = statementMetadata[fileName].openingBalance;
+      addLog(`Using metadata opening balance: MUR ${currentBalance.toLocaleString()}`, 'info');
+    }
+
     // Multiple transaction patterns for MCB
     const patterns = [
       // Pattern 1: Date Date Amount Balance Description
-      /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})\s+(.+?)(?=\d{2}[\/\-]\d{2}[\/\-]\d{4}|$)/g,
-      // Pattern 2: Date Description Amount Balance
-      /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+([A-Z].+?)\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})(?=\s|$)/g,
+      {
+        regex: /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})\s+(.+?)(?=\d{2}[\/\-]\d{2}[\/\-]\d{4}|Opening|Closing|$)/g,
+        type: 'amount-balance-desc'
+      },
+      // Pattern 2: Date Date Description Amount Balance
+      {
+        regex: /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+([A-Z][^0-9]+?)\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})/g,
+        type: 'desc-amount-balance'
+      },
       // Pattern 3: Date Date Description Debit Credit Balance
-      /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(.+?)\s+([\d,]+\.?\d{2})?\s+([\d,]+\.?\d{2})?\s+([\d,]+\.?\d{2})/g
+      {
+        regex: /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(.+?)\s+([\d,]+\.?\d{2})?\s+([\d,]+\.?\d{2})?\s+([\d,]+\.?\d{2})\s*$/gm,
+        type: 'debit-credit-columns'
+      }
     ];
 
     // Try each pattern
     for (const pattern of patterns) {
       let match;
-      while ((match = pattern.exec(cleanedText)) !== null) {
+      
+      while ((match = pattern.regex.exec(cleanedText)) !== null) {
         transactionCounter++;
         
         let transaction = {
           transactionDate: match[1],
-          valueDate: match[2] || match[1],
+          valueDate: match[2],
           description: '',
           amount: 0,
           balance: 0,
@@ -371,35 +420,113 @@ const BankStatementProcessor = () => {
           transactionId: `${fileName}_${transactionCounter}`
         };
 
-        // Parse based on match length
-        if (match.length === 6) {
-          // Pattern 1: Date Date Amount Balance Description
+        if (pattern.type === 'amount-balance-desc') {
           transaction.amount = parseFloat(match[3].replace(/,/g, ''));
           transaction.balance = parseFloat(match[4].replace(/,/g, ''));
           transaction.description = match[5].trim();
-        } else if (match.length === 5) {
-          // Pattern 2: Date Description Amount Balance
-          transaction.description = match[2].trim();
-          transaction.amount = parseFloat(match[3].replace(/,/g, ''));
-          transaction.balance = parseFloat(match[4].replace(/,/g, ''));
-        } else if (match.length === 7) {
-          // Pattern 3: With separate debit/credit columns
+        } else if (pattern.type === 'desc-amount-balance') {
           transaction.description = match[3].trim();
-          const debit = match[4] ? parseFloat(match[4].replace(/,/g, '')) : 0;
-          const credit = match[5] ? parseFloat(match[5].replace(/,/g, '')) : 0;
-          transaction.amount = debit || credit;
-          transaction.isDebit = debit > 0;
+          transaction.amount = parseFloat(match[4].replace(/,/g, ''));
+          transaction.balance = parseFloat(match[5].replace(/,/g, ''));
+        } else if (pattern.type === 'debit-credit-columns') {
+          transaction.description = match[3].trim();
+          const debitAmount = match[4] ? parseFloat(match[4].replace(/,/g, '')) : 0;
+          const creditAmount = match[5] ? parseFloat(match[5].replace(/,/g, '')) : 0;
           transaction.balance = parseFloat(match[6].replace(/,/g, ''));
+          
+          if (creditAmount > 0) {
+            transaction.amount = creditAmount;
+            transaction.isDebit = false;
+          } else if (debitAmount > 0) {
+            transaction.amount = debitAmount;
+            transaction.isDebit = true;
+          } else {
+            // If both are 0, use balance comparison
+            transaction.amount = Math.abs(transaction.balance - currentBalance);
+          }
+        }
+
+        // CRITICAL FIX: Determine debit/credit based on balance change
+        if (pattern.type !== 'debit-credit-columns' || (match[4] === undefined && match[5] === undefined)) {
+          if (currentBalance > 0) {
+            if (transaction.balance > currentBalance) {
+              // Balance increased = CREDIT (money came in)
+              transaction.isDebit = false;
+              if (debugMode) {
+                addLog(`Credit: ${transaction.description.substring(0, 30)}... Balance: ${currentBalance.toFixed(2)} → ${transaction.balance.toFixed(2)}`, 'info');
+              }
+            } else if (transaction.balance < currentBalance) {
+              // Balance decreased = DEBIT (money went out)
+              transaction.isDebit = true;
+              if (debugMode) {
+                addLog(`Debit: ${transaction.description.substring(0, 30)}... Balance: ${currentBalance.toFixed(2)} → ${transaction.balance.toFixed(2)}`, 'info');
+              }
+            } else {
+              // Balance unchanged - check description
+              const desc = transaction.description.toLowerCase();
+              transaction.isDebit = !isLikelyCredit(desc);
+            }
+          } else {
+            // First transaction - compare with opening balance if available
+            const openingBal = statementMetadata[fileName]?.openingBalance || 0;
+            if (openingBal > 0) {
+              transaction.isDebit = transaction.balance < openingBal;
+            } else {
+              // Fallback to description analysis
+              const desc = transaction.description.toLowerCase();
+              transaction.isDebit = !isLikelyCredit(desc);
+            }
+          }
+        }
+
+        // Update current balance for next comparison
+        if (transaction.balance > 0) {
+          currentBalance = transaction.balance;
         }
 
         if (transaction.amount > 0) {
           transactions.push(transaction);
         }
       }
+      
+      if (transactions.length > 0) {
+        break; // Use first successful pattern
+      }
     }
 
+    // Sort transactions by date
+    transactions.sort((a, b) => {
+      const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+      const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+      return dateA - dateB;
+    });
+
+    // Final validation pass - ensure debit/credit logic is correct
+    if (transactions.length > 0) {
+      let prevBalance = statementMetadata[fileName]?.openingBalance || 0;
+      
+      transactions.forEach((trans, index) => {
+        if (prevBalance > 0) {
+          // Double-check: did balance go up or down?
+          if (trans.balance > prevBalance) {
+            trans.isDebit = false; // Definitely a credit
+          } else if (trans.balance < prevBalance) {
+            trans.isDebit = true;  // Definitely a debit
+          }
+        }
+        prevBalance = trans.balance;
+      });
+    }
+
+    // Log summary
+    const debits = transactions.filter(t => t.isDebit).length;
+    const credits = transactions.filter(t => !t.isDebit).length;
+    const totalDebits = transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+    const totalCredits = transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+    
     addLog(`Extracted ${transactions.length} transactions from ${fileName}`, 
           transactions.length > 0 ? 'success' : 'warning');
+    addLog(`Summary: ${debits} debits (MUR ${totalDebits.toLocaleString()}), ${credits} credits (MUR ${totalCredits.toLocaleString()})`, 'info');
     
     if (debugMode && transactions.length === 0) {
       addLog('DEBUG: Sample text for inspection:', 'info');
@@ -409,12 +536,33 @@ const BankStatementProcessor = () => {
     return transactions;
   };
 
-  // Categorize transaction
+  // Enhanced categorization with credit/debit awareness
   const categorizeTransaction = (transaction) => {
     const description = transaction.description.toLowerCase();
     let bestMatch = null;
     let bestScore = 0;
     
+    // Special handling for credit transactions
+    if (!transaction.isDebit) {
+      // Credit-specific categorization
+      if (description.includes('salary') || description.includes('wage')) {
+        return { category: 'Salary', confidence: 0.95 };
+      }
+      if (description.includes('transfer') && (description.includes('in') || description.includes('received'))) {
+        return { category: 'Transfer In', confidence: 0.9 };
+      }
+      if (description.includes('deposit')) {
+        return { category: 'Cash Deposit', confidence: 0.9 };
+      }
+      if (description.includes('interest')) {
+        return { category: 'Interest Earned', confidence: 0.9 };
+      }
+      if (description.includes('refund') || description.includes('reversal')) {
+        return { category: 'Refund', confidence: 0.9 };
+      }
+    }
+    
+    // Check all categories
     for (const [category, config] of Object.entries(categoryMapping)) {
       let score = 0;
       
@@ -460,6 +608,10 @@ const BankStatementProcessor = () => {
     Object.keys(categoryMapping).forEach(category => {
       newResults[category] = [];
     });
+    // Add Refund category if not in mapping
+    if (!newResults['Refund']) {
+      newResults['Refund'] = [];
+    }
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -482,11 +634,12 @@ const BankStatementProcessor = () => {
             continue;
           }
           
-          // Extract metadata
+          // Extract metadata FIRST (important for transaction detection)
           const metadata = extractStatementMetadata(extractionResult.text, file.name);
           newStatementMetadata[file.name] = metadata;
+          setStatementMetadata(prev => ({ ...prev, [file.name]: metadata })); // Update state immediately
           
-          // Extract transactions
+          // Extract transactions (will use metadata for balance comparison)
           const transactions = extractTransactions(extractionResult.text, file.name);
           
           // Categorize transactions
@@ -499,6 +652,9 @@ const BankStatementProcessor = () => {
             if (categoryResult) {
               transaction.category = categoryResult.category;
               transaction.confidence = categoryResult.confidence;
+              if (!newResults[categoryResult.category]) {
+                newResults[categoryResult.category] = [];
+              }
               newResults[categoryResult.category].push(transaction);
               categorized++;
             } else {
@@ -509,14 +665,24 @@ const BankStatementProcessor = () => {
             }
           }
           
+          // Calculate actual debits and credits
+          const totalDebits = transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+          const totalCredits = transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+          
           newFileStats[file.name] = {
             status: 'success',
             total: transactions.length,
             categorized: categorized,
             uncategorized: uncategorized,
+            totalDebits: totalDebits,
+            totalCredits: totalCredits,
+            debitCount: transactions.filter(t => t.isDebit).length,
+            creditCount: transactions.filter(t => !t.isDebit).length,
             successRate: transactions.length > 0 ? ((categorized / transactions.length) * 100).toFixed(1) : 0,
             metadata: metadata
           };
+          
+          addLog(`📊 ${file.name} Summary: Debits: MUR ${totalDebits.toLocaleString()} (${newFileStats[file.name].debitCount}), Credits: MUR ${totalCredits.toLocaleString()} (${newFileStats[file.name].creditCount})`, 'success');
           
         } catch (error) {
           addLog(`❌ Failed: ${file.name}: ${error.message}`, 'error');
