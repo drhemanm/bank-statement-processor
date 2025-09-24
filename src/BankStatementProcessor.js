@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, AlertCircle, CheckCircle, Loader2, Eye, Settings, Zap, XCircle, FileWarning, DollarSign, TrendingUp, TrendingDown } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle, Loader2, Eye, Settings, Zap, XCircle, FileWarning, DollarSign, TrendingUp, TrendingDown, ToggleLeft, ToggleRight } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
 import EnhancedResultsDisplay from './components/EnhancedResultsDisplay';
@@ -22,9 +22,11 @@ const BankStatementProcessor = () => {
   const [exportMode, setExportMode] = useState('combined');
   const [showLogs, setShowLogs] = useState(true);
   const [aiEnhancementEnabled, setAiEnhancementEnabled] = useState(false);
+  const [aiAvailable, setAiAvailable] = useState(false); // Track if AI is available
   const [apiStatus, setApiStatus] = useState('checking');
   const [debugMode, setDebugMode] = useState(false);
   const [validationErrors, setValidationErrors] = useState({});
+  const [forceOCR, setForceOCR] = useState(false); // NEW: Force OCR mode even if AI is available
 
   // Enhanced MCB-specific categorization mapping with all transaction types
   const categoryMapping = {
@@ -86,7 +88,7 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Check API status on mount - UPDATED WITH BETTER ERROR HANDLING
+  // Check API status on mount
   useEffect(() => {
     checkAPIStatus();
   }, []);
@@ -95,7 +97,6 @@ const BankStatementProcessor = () => {
     try {
       setCurrentStep('Checking Claude API status...');
       
-      // Use the correct URL based on environment
       const apiUrl = process.env.NODE_ENV === 'development' 
         ? 'http://localhost:3000/api/debug'
         : '/api/debug';
@@ -105,26 +106,42 @@ const BankStatementProcessor = () => {
       const response = await fetch(apiUrl);
       const data = await response.json();
       
-      console.log('API Status Response:', data); // Debug logging
+      console.log('API Status Response:', data);
       
       if (data.apiTestResult?.status === 'SUCCESS') {
         setApiStatus('working');
-        setAiEnhancementEnabled(true);
-        addLog('✅ Claude AI enhancement is available', 'success');
-        console.log('AI Enhancement enabled successfully');
+        setAiAvailable(true); // AI is available
+        setAiEnhancementEnabled(false); // But start with it disabled by default
+        addLog('✅ Claude AI available - Toggle ON to use AI enhancement', 'success');
       } else {
         setApiStatus('error');
-        addLog(`⚠️ AI unavailable: ${data.apiTestResult?.error || 'Will use OCR'}`, 'warning');
+        setAiAvailable(false);
         setAiEnhancementEnabled(false);
-        console.log('AI Enhancement not available:', data.apiTestResult);
+        addLog(`⚠️ AI unavailable: ${data.apiTestResult?.error || 'Will use OCR'}`, 'warning');
       }
     } catch (error) {
       console.error('API Status Check Error:', error);
       setApiStatus('error');
-      addLog('⚠️ AI unavailable - using fallback OCR', 'warning');
+      setAiAvailable(false);
       setAiEnhancementEnabled(false);
+      addLog('⚠️ AI unavailable - using OCR mode', 'warning');
     }
     setCurrentStep('');
+  };
+
+  // Toggle AI Enhancement
+  const toggleAIEnhancement = () => {
+    if (aiAvailable) {
+      const newState = !aiEnhancementEnabled;
+      setAiEnhancementEnabled(newState);
+      if (newState) {
+        addLog('🤖 AI Enhancement ENABLED - Will use Claude for better accuracy', 'success');
+      } else {
+        addLog('🔍 AI Enhancement DISABLED - Using pure OCR mode', 'info');
+      }
+    } else {
+      addLog('❌ AI not available - Cannot enable', 'error');
+    }
   };
 
   // Enhanced logging
@@ -191,10 +208,11 @@ const BankStatementProcessor = () => {
     return true;
   };
 
-  // Extract text with AI enhancement - UPDATED WITH BETTER API HANDLING
+  // Extract text with AI enhancement - Only if enabled
   const enhanceOCRWithClaude = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
-    if (!aiEnhancementEnabled) {
-      console.log('AI enhancement disabled, returning original text');
+    // Check if AI is both available AND enabled by user
+    if (!aiAvailable || !aiEnhancementEnabled || forceOCR) {
+      console.log('AI enhancement disabled or not available, returning original text');
       return ocrText;
     }
 
@@ -206,13 +224,11 @@ const BankStatementProcessor = () => {
         pageNumber: pageNumber
       };
 
-      // Use the correct URL based on environment
       const apiUrl = process.env.NODE_ENV === 'development' 
         ? 'http://localhost:3000/api/enhance-ocr'
         : '/api/enhance-ocr';
 
       console.log('Calling enhance API:', apiUrl);
-      console.log('Request type:', isImage ? 'Image OCR' : 'Text Enhancement');
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -227,11 +243,11 @@ const BankStatementProcessor = () => {
       if (!response.ok) {
         const errorData = await response.json();
         console.error('API Error:', errorData);
-        throw new Error(`API error: ${response.status} - ${errorData.message}`);
+        throw new Error(`API error: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('Enhancement successful, method:', data.method);
+      console.log('Enhancement successful');
       
       if (isImage && data.ocrText) {
         addLog(`✅ AI Vision OCR completed for page ${pageNumber}`, 'success');
@@ -244,7 +260,7 @@ const BankStatementProcessor = () => {
       return ocrText;
     } catch (error) {
       console.error('Enhancement error:', error);
-      addLog(`⚠️ AI enhancement failed: ${error.message}`, 'warning');
+      addLog(`⚠️ AI enhancement failed, using original text`, 'warning');
       return ocrText;
     }
   };
@@ -253,6 +269,7 @@ const BankStatementProcessor = () => {
   const processPDF = async (file) => {
     try {
       addLog(`📄 Processing: ${file.name}`, 'info');
+      addLog(`Mode: ${aiEnhancementEnabled ? '🤖 AI-Enhanced' : '🔍 Pure OCR'}`, 'info');
       
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -277,7 +294,7 @@ const BankStatementProcessor = () => {
         
         // If no text or too short, use OCR
         if (!pageText || pageText.trim().length < 50) {
-          addLog(`Page ${pageNum}: Using OCR...`, 'info');
+          addLog(`Page ${pageNum}: Using ${aiEnhancementEnabled ? 'AI OCR' : 'Tesseract OCR'}...`, 'info');
           
           const canvas = document.createElement('canvas');
           const context = canvas.getContext('2d');
@@ -291,17 +308,16 @@ const BankStatementProcessor = () => {
             viewport: viewport
           }).promise;
           
-          if (aiEnhancementEnabled) {
+          if (aiEnhancementEnabled && aiAvailable) {
             const imageData = canvas.toDataURL('image/png').split(',')[1];
             pageText = await enhanceOCRWithClaude(null, imageData, true, pageNum);
-            addLog(`Page ${pageNum}: AI OCR complete`, 'success');
           } else {
             const result = await Tesseract.recognize(canvas, 'eng');
             pageText = result.data.text;
             addLog(`Page ${pageNum}: Tesseract OCR complete`, 'success');
           }
-        } else if (aiEnhancementEnabled && pageText) {
-          // Enhance extracted text with AI
+        } else if (aiEnhancementEnabled && aiAvailable && pageText) {
+          // Enhance extracted text with AI only if enabled
           pageText = await enhanceOCRWithClaude(pageText, null, false, pageNum);
         }
         
@@ -709,7 +725,8 @@ const BankStatementProcessor = () => {
             debitCount: transactions.filter(t => t.isDebit).length,
             creditCount: transactions.filter(t => !t.isDebit).length,
             successRate: transactions.length > 0 ? ((categorized / transactions.length) * 100).toFixed(1) : 0,
-            metadata: metadata
+            metadata: metadata,
+            processingMode: aiEnhancementEnabled ? 'AI-Enhanced' : 'Pure OCR'
           };
           
           addLog(`📊 ${file.name} Summary: Debits: MUR ${totalDebits.toLocaleString()} (${newFileStats[file.name].debitCount}), Credits: MUR ${totalCredits.toLocaleString()} (${newFileStats[file.name].creditCount})`, 'success');
@@ -735,6 +752,7 @@ const BankStatementProcessor = () => {
       const totalCategorized = Object.values(newResults).reduce((sum, arr) => sum + arr.length, 0);
       
       addLog(`✅ Processing complete! ${totalTransactions} transactions found`, 'success');
+      addLog(`📊 Mode used: ${aiEnhancementEnabled ? '🤖 AI-Enhanced' : '🔍 Pure OCR'}`, 'info');
       if (newUncategorized.length > 0) {
         addLog(`⚠️ ${newUncategorized.length} uncategorized transactions need review`, 'warning');
       }
@@ -782,32 +800,62 @@ const BankStatementProcessor = () => {
         <div className="text-center">
           <div className="flex items-center justify-center space-x-3 mb-4">
             <FileText className="h-10 w-10 text-blue-600" />
-            {apiStatus === 'working' && <Zap className="h-5 w-5 text-yellow-500" />}
+            {aiEnhancementEnabled && <Zap className="h-5 w-5 text-yellow-500" />}
           </div>
           <h1 className="text-4xl font-bold text-gray-900">MCB Bank Statement Processor</h1>
           <p className="text-lg text-gray-600 mt-2">
-            Convert MCB PDF statements to organized Excel with AI-powered extraction
+            Convert MCB PDF statements to organized Excel with {aiEnhancementEnabled ? 'AI-powered' : 'OCR'} extraction
           </p>
           
-          {/* API Status */}
-          <div className="mt-4 inline-flex items-center space-x-2 px-4 py-2 rounded-full bg-white shadow-sm">
-            {apiStatus === 'working' ? (
-              <>
-                <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
-                <span className="text-sm text-green-700">AI Enhancement Active</span>
-              </>
-            ) : apiStatus === 'checking' ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
-                <span className="text-sm text-gray-600">Checking AI status...</span>
-              </>
-            ) : (
-              <>
-                <div className="h-2 w-2 bg-yellow-500 rounded-full" />
-                <span className="text-sm text-yellow-700">Using OCR Mode</span>
-              </>
-            )}
+          {/* Processing Mode Selector - NEW UI! */}
+          <div className="mt-4 inline-flex items-center space-x-4 px-4 py-2 rounded-full bg-white shadow-sm">
+            <div className="flex items-center space-x-2">
+              {apiStatus === 'checking' ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
+                  <span className="text-sm text-gray-600">Checking AI...</span>
+                </>
+              ) : aiAvailable ? (
+                <>
+                  <span className={`text-sm font-medium ${!aiEnhancementEnabled ? 'text-blue-700' : 'text-gray-500'}`}>
+                    🔍 Pure OCR
+                  </span>
+                  
+                  <button
+                    onClick={toggleAIEnhancement}
+                    className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                    style={{ backgroundColor: aiEnhancementEnabled ? '#10b981' : '#94a3b8' }}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        aiEnhancementEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                  
+                  <span className={`text-sm font-medium ${aiEnhancementEnabled ? 'text-green-700' : 'text-gray-500'}`}>
+                    🤖 AI Enhanced
+                  </span>
+                </>
+              ) : (
+                <>
+                  <div className="h-2 w-2 bg-yellow-500 rounded-full" />
+                  <span className="text-sm text-yellow-700">OCR Mode (AI Unavailable)</span>
+                </>
+              )}
+            </div>
           </div>
+          
+          {/* Mode Description */}
+          {aiAvailable && (
+            <div className="mt-2 text-sm text-gray-600">
+              {aiEnhancementEnabled ? (
+                <span>✨ AI will enhance text extraction for better accuracy</span>
+              ) : (
+                <span>⚡ Using fast OCR with your optimized patterns</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Balance Summary (if we have results) */}
@@ -919,7 +967,12 @@ const BankStatementProcessor = () => {
                         <span className="text-sm">{validationErrors[file.name]}</span>
                       </div>
                     ) : fileStats[file.name]?.status === 'success' ? (
-                      <CheckCircle className="h-5 w-5 text-green-500" />
+                      <div className="flex items-center space-x-2">
+                        <CheckCircle className="h-5 w-5 text-green-500" />
+                        <span className="text-xs text-gray-500">
+                          {fileStats[file.name]?.processingMode}
+                        </span>
+                      </div>
                     ) : fileStats[file.name]?.status === 'error' ? (
                       <XCircle className="h-5 w-5 text-red-500" />
                     ) : null}
