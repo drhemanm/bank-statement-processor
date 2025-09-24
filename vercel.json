@@ -1,15 +1,18 @@
 {
   "version": 2,
-  "functions": {
-    "api/enhance-ocr.js": {
-      "maxDuration": 30
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "build"
+      }
     },
-    "api/debug.js": {
-      "maxDuration": 10
+    {
+      "src": "api/*.js",
+      "use": "@vercel/node"
     }
-  },
-  "buildCommand": "npm run build",
-  "outputDirectory": "build",
+  ],
   "routes": [
     {
       "src": "/api/(.*)",
@@ -17,26 +20,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/index.html"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, PUT, DELETE, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type, Authorization"
-        }
-      ]
+      "dest": "/$1"
     }
   ]
 }
