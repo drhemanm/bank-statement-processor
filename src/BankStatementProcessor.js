@@ -1,274 +1,685 @@
-// Updated EnhancedResultsDisplay.js to handle the new categories
+import React, { useState, useEffect } from 'react';
+import { Upload, FileText, Download, AlertCircle, CheckCircle, Loader2, Eye, Settings } from 'lucide-react';
+import * as pdfjsLib from 'pdfjs-dist';
+import Tesseract from 'tesseract.js';
+import EnhancedResultsDisplay from './components/EnhancedResultsDisplay';
+import SimpleGroupingControls from './components/SimpleGroupingControls';
+import { generateExcelReport } from './utils/excelExport';
 
-import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, AlertTriangle, Eye, EyeOff, FileText, Calendar, DollarSign } from 'lucide-react';
+// Configure PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
-const EnhancedResultsDisplay = ({ results, uncategorizedData, fileStats }) => {
-  const [expandedCategories, setExpandedCategories] = useState({});
-  const [showUncategorizedDetails, setShowUncategorizedDetails] = useState(true);
-  const [uncategorizedViewMode, setUncategorizedViewMode] = useState('list');
+const BankStatementProcessor = () => {
+  // State management with proper initialization
+  const [files, setFiles] = useState([]);
+  const [processing, setProcessing] = useState(false);
+  const [results, setResults] = useState({});
+  const [uncategorizedData, setUncategorizedData] = useState([]);
+  const [fileStats, setFileStats] = useState({});
+  const [statementMetadata, setStatementMetadata] = useState({});
+  const [logs, setLogs] = useState([]);
+  const [exportMode, setExportMode] = useState('combined');
+  const [documentCounters, setDocumentCounters] = useState({});
+  const [showLogs, setShowLogs] = useState(false);
 
-  // Updated category colors for your new categories
-  const categoryColors = {
-    'CSG/PRGF': 'bg-blue-50 text-blue-800 border-blue-200',
-    'Prime (Scheme)': 'bg-purple-50 text-purple-800 border-purple-200', 
-    'Consultancy Fee': 'bg-indigo-50 text-indigo-800 border-indigo-200',
-    'Salary': 'bg-green-50 text-green-800 border-green-200',
-    'Purchase/Payment/Expense': 'bg-red-50 text-red-800 border-red-200',
-    'Sales': 'bg-emerald-50 text-emerald-800 border-emerald-200',
-    'Cash withdrawal': 'bg-orange-50 text-orange-800 border-orange-200',
-    'Cash Deposit': 'bg-teal-50 text-teal-800 border-teal-200',
-    'Bank Charges': 'bg-gray-50 text-gray-800 border-gray-200',
-    'Miscellaneous': 'bg-yellow-50 text-yellow-800 border-yellow-200',
-    'Uncategorised': 'bg-red-50 text-red-800 border-red-200'
+  // Enhanced categorization mapping with your specific categories
+  const categoryMapping = {
+    'CSG/PRGF': [
+      'csg', 'prgf', 'contribution sociale', 'government contribution',
+      'social security', 'pension fund', 'retirement fund'
+    ],
+    'Prime (Scheme)': [
+      'prime', 'bonus', 'incentive', 'scheme payment', 'performance bonus',
+      'end year bonus', 'annual bonus', 'productivity bonus'
+    ],
+    'Consultancy Fee': [
+      'consultancy', 'consulting fee', 'advisory fee', 'professional service',
+      'consulting charge', 'expert fee', 'consultation'
+    ],
+    'Salary': [
+      'salary', 'wage', 'staff payment', 'employee payment', 'payroll',
+      'monthly salary', 'basic salary', 'remuneration', 'staff salary'
+    ],
+    'Purchase/Payment/Expense': [
+      'purchase', 'payment', 'expense', 'bill payment', 'utility payment',
+      'vendor payment', 'supplier payment', 'invoice payment', 'settlement'
+    ],
+    'Sales': [
+      'sales', 'revenue', 'income', 'receipt', 'customer payment',
+      'sales receipt', 'collection', 'receivable'
+    ],
+    'Cash withdrawal': [
+      'cash withdrawal', 'atm withdrawal', 'cash advance', 'withdraw',
+      'atm', 'cash out', 'withdrawal'
+    ],
+    'Cash Deposit': [
+      'cash deposit', 'deposit', 'cash in', 'lodgement', 'cash lodgement',
+      'deposit cash', 'cash payment'
+    ],
+    'Bank Charges': [
+      'bank charge', 'service charge', 'fee', 'commission', 'bank fee',
+      'transaction fee', 'maintenance fee', 'processing fee', 'handling charge'
+    ],
+    'Miscellaneous': [
+      'miscellaneous', 'other', 'sundry', 'various', 'general',
+      'misc', 'other income', 'other expense'
+    ]
   };
 
-  // Toggle category expansion
-  const toggleCategory = (category) => {
-    setExpandedCategories(prev => ({
-      ...prev,
-      [category]: !prev[category]
-    }));
+  // Add log function
+  const addLog = (message, type = 'info') => {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = { timestamp, message, type };
+    setLogs(prev => [logEntry, ...prev]);
+    console.log(`[${type.toUpperCase()}] ${message}`);
   };
 
-  // Calculate stats
-  const stats = {
-    totalTransactions: Object.values(results).reduce((sum, arr) => sum + arr.length, 0) + uncategorizedData.length,
-    categorizedCount: Object.values(results).reduce((sum, arr) => sum + arr.length, 0),
-    uncategorizedCount: uncategorizedData.length,
-    openingBalance: Object.values(fileStats).reduce((sum, stats) => sum + (stats.openingBalance || 0), 0),
-    closingBalance: Object.values(fileStats).reduce((sum, stats) => sum + (stats.closingBalance || 0), 0),
+  // File handling
+  const handleFileUpload = (event) => {
+    const uploadedFiles = Array.from(event.target.files);
+    const pdfFiles = uploadedFiles.filter(file => file.type === 'application/pdf');
+    
+    if (pdfFiles.length !== uploadedFiles.length) {
+      addLog('Only PDF files are supported. Some files were ignored.', 'warning');
+    }
+    
+    if (pdfFiles.length === 0) {
+      addLog('No valid PDF files selected.', 'error');
+      return;
+    }
+
+    setFiles(pdfFiles);
+    addLog(`${pdfFiles.length} PDF file(s) selected for processing.`, 'success');
+    
+    // Reset previous results
+    setResults({});
+    setUncategorizedData([]);
+    setFileStats({});
+    setStatementMetadata({});
+    setDocumentCounters({});
   };
 
-  // Group uncategorized by source file
-  const uncategorizedByFile = uncategorizedData.reduce((acc, transaction) => {
-    const file = transaction.sourceFile || 'Unknown File';
-    if (!acc[file]) acc[file] = [];
-    acc[file].push(transaction);
-    return acc;
-  }, {});
+  // Enhanced OCR function with Claude Vision API
+  const enhanceOCRWithClaude = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
+    try {
+      const response = await fetch('/api/enhance-ocr', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ocrText: ocrText,
+          imageData: imageData,
+          isImage: isImage,
+          pageNumber: pageNumber
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`API request failed: ${response.status} - ${errorData.message || response.statusText}`);
+      }
+
+      const data = await response.json();
+      return isImage ? data.ocrText : data.enhancedText;
+    } catch (error) {
+      addLog(`OCR enhancement failed for page ${pageNumber}: ${error.message}`, 'warning');
+      return ocrText; // Return original text if enhancement fails
+    }
+  };
+
+  // PDF processing with enhanced OCR
+  const processPDF = async (file) => {
+    try {
+      addLog(`Processing PDF: ${file.name}`, 'info');
+      
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      let allText = '';
+      let pageTexts = [];
+
+      // Process each page
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        addLog(`Processing page ${pageNum}/${pdf.numPages} of ${file.name}`, 'info');
+        
+        try {
+          const page = await pdf.getPage(pageNum);
+          
+          // First try to extract text directly from PDF
+          const textContent = await page.getTextContent();
+          let pageText = textContent.items.map(item => item.str).join(' ');
+          
+          // If direct text extraction yields poor results, use OCR
+          if (!pageText || pageText.trim().length < 50) {
+            addLog(`Page ${pageNum} has minimal text, using OCR...`, 'info');
+            
+            // Render page to canvas for OCR
+            const canvas = document.createElement('canvas');
+            const canvasContext = canvas.getContext('2d');
+            const viewport = page.getViewport({ scale: 2.0 });
+            
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            
+            await page.render({
+              canvasContext: canvasContext,
+              viewport: viewport
+            }).promise;
+            
+            // Convert canvas to image data
+            const imageDataUrl = canvas.toDataURL('image/png');
+            const base64Data = imageDataUrl.split(',')[1];
+            
+            // Use Claude Vision API for OCR
+            pageText = await enhanceOCRWithClaude('', base64Data, true, pageNum);
+            
+            // Fallback to Tesseract if Claude fails
+            if (!pageText || pageText.trim().length < 20) {
+              addLog(`Claude OCR failed for page ${pageNum}, using Tesseract...`, 'info');
+              const ocrResult = await Tesseract.recognize(canvas, 'eng', {
+                logger: m => {
+                  if (m.status === 'recognizing text') {
+                    addLog(`OCR progress: ${Math.round(m.progress * 100)}%`, 'info');
+                  }
+                }
+              });
+              pageText = ocrResult.data.text;
+            }
+          }
+          
+          // Enhance text with Claude if we have content
+          if (pageText && pageText.trim().length > 20) {
+            const enhancedText = await enhanceOCRWithClaude(pageText, null, false, pageNum);
+            pageText = enhancedText || pageText;
+          }
+          
+          pageTexts.push(pageText);
+          allText += pageText + '\n';
+          
+        } catch (pageError) {
+          addLog(`Error processing page ${pageNum}: ${pageError.message}`, 'error');
+          continue;
+        }
+      }
+
+      if (!allText.trim()) {
+        throw new Error('No text could be extracted from this PDF');
+      }
+
+      addLog(`Successfully extracted text from ${file.name} (${allText.length} characters)`, 'success');
+      return allText;
+
+    } catch (error) {
+      addLog(`Failed to process ${file.name}: ${error.message}`, 'error');
+      throw error;
+    }
+  };
+
+  // Extract metadata from statement text
+  const extractStatementMetadata = (text, fileName) => {
+    const metadata = {
+      fileName: fileName,
+      accountNumber: null,
+      iban: null,
+      statementPeriod: null,
+      currency: 'MUR',
+      openingBalance: 0,
+      closingBalance: 0
+    };
+
+    // Extract account number (various patterns)
+    const accountPatterns = [
+      /account\s*(?:number|no\.?|#)?\s*:?\s*(\d+)/i,
+      /a\/c\s*(?:no\.?|number)?\s*:?\s*(\d+)/i,
+      /(?:account|a\/c)\s*(\d{10,})/i
+    ];
+
+    for (const pattern of accountPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        metadata.accountNumber = match[1];
+        break;
+      }
+    }
+
+    // Extract IBAN
+    const ibanMatch = text.match(/IBAN\s*:?\s*([A-Z]{2}\d{2}[A-Z\d]+)/i);
+    if (ibanMatch) {
+      metadata.iban = ibanMatch[1];
+    }
+
+    // Extract statement period
+    const periodPatterns = [
+      /(?:statement|period|from)\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\s+(?:to|until|-)\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i,
+      /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\s*(?:to|-)\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i
+    ];
+
+    for (const pattern of periodPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        metadata.statementPeriod = `${match[1]} to ${match[2]}`;
+        break;
+      }
+    }
+
+    // Extract opening balance
+    const openingBalancePatterns = [
+      /(?:opening|previous|brought\s+forward|b\/f)\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
+      /balance\s+(?:brought\s+)?forward\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
+      /previous\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i
+    ];
+
+    for (const pattern of openingBalancePatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        metadata.openingBalance = parseFloat(match[1].replace(/,/g, ''));
+        break;
+      }
+    }
+
+    // Extract closing balance
+    const closingBalancePatterns = [
+      /(?:closing|final|current)\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
+      /balance\s+(?:carried\s+)?forward\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
+      /current\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i
+    ];
+
+    for (const pattern of closingBalancePatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        metadata.closingBalance = parseFloat(match[1].replace(/,/g, ''));
+        break;
+      }
+    }
+
+    return metadata;
+  };
+
+  // Enhanced transaction extraction
+  const extractTransactions = (text, fileName) => {
+    const transactions = [];
+    const lines = text.split('\n').filter(line => line.trim());
+
+    // Enhanced transaction pattern - more flexible
+    const transactionPattern = /(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})?\s*(.+?)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)$/;
+    
+    let transactionCounter = 0;
+
+    for (const line of lines) {
+      const match = line.match(transactionPattern);
+      if (match) {
+        transactionCounter++;
+        
+        const transactionDate = match[1];
+        const valueDate = match[2] || match[1]; // Use transaction date if value date missing
+        let description = match[3].trim();
+        const amountStr = match[4].replace(/,/g, '');
+        const balanceStr = match[5].replace(/,/g, '');
+
+        // Parse amounts
+        const amount = Math.abs(parseFloat(amountStr));
+        const balance = parseFloat(balanceStr);
+        const isDebit = amountStr.includes('-') || description.toLowerCase().includes('withdrawal') || description.toLowerCase().includes('charge');
+
+        // Clean description
+        description = description.replace(/\s+/g, ' ').trim();
+
+        if (!isNaN(amount) && !isNaN(balance) && amount > 0) {
+          transactions.push({
+            transactionDate,
+            valueDate,
+            description,
+            amount,
+            balance,
+            isDebit,
+            sourceFile: fileName,
+            transactionId: `${fileName}_${transactionCounter}`
+          });
+        }
+      }
+    }
+
+    return transactions;
+  };
+
+  // Categorization logic
+  const categorizeTransaction = (transaction) => {
+    const description = transaction.description.toLowerCase();
+    
+    for (const [category, keywords] of Object.entries(categoryMapping)) {
+      for (const keyword of keywords) {
+        if (description.includes(keyword.toLowerCase())) {
+          return {
+            category,
+            matchedKeyword: keyword,
+            confidence: 0.9
+          };
+        }
+      }
+    }
+    
+    return null; // No match found
+  };
+
+  // Main processing function
+  const processFiles = async () => {
+    if (files.length === 0) {
+      addLog('No files selected for processing.', 'error');
+      return;
+    }
+
+    setProcessing(true);
+    setLogs([]);
+    
+    const newResults = {};
+    const newUncategorized = [];
+    const newFileStats = {};
+    const newStatementMetadata = {};
+    const newCounters = {};
+
+    // Initialize categories
+    Object.keys(categoryMapping).forEach(category => {
+      newResults[category] = [];
+    });
+
+    try {
+      addLog(`Starting processing of ${files.length} file(s)...`, 'info');
+      
+      for (const file of files) {
+        try {
+          // Extract text from PDF
+          const extractedText = await processPDF(file);
+          
+          // Extract metadata
+          const metadata = extractStatementMetadata(extractedText, file.name);
+          newStatementMetadata[file.name] = metadata;
+          
+          // Extract transactions
+          const transactions = extractTransactions(extractedText, file.name);
+          
+          addLog(`Extracted ${transactions.length} transactions from ${file.name}`, 'info');
+          
+          // Categorize transactions
+          let categorized = 0;
+          let uncategorized = 0;
+          
+          for (const transaction of transactions) {
+            const categoryResult = categorizeTransaction(transaction);
+            
+            if (categoryResult) {
+              transaction.category = categoryResult.category;
+              transaction.matchedKeyword = categoryResult.matchedKeyword;
+              newResults[categoryResult.category].push(transaction);
+              categorized++;
+            } else {
+              transaction.category = 'Uncategorised';
+              newUncategorized.push(transaction);
+              uncategorized++;
+            }
+          }
+          
+          // Store file statistics
+          newFileStats[file.name] = {
+            status: 'success',
+            total: transactions.length,
+            categorized: categorized,
+            uncategorized: uncategorized,
+            successRate: transactions.length > 0 ? ((categorized / transactions.length) * 100).toFixed(1) : 0
+          };
+
+          newCounters[file.name] = { processed: transactions.length };
+          
+          addLog(`${file.name}: ${categorized} categorized, ${uncategorized} uncategorised`, 'success');
+          
+        } catch (fileError) {
+          addLog(`Failed to process ${file.name}: ${fileError.message}`, 'error');
+          newFileStats[file.name] = {
+            status: 'error',
+            error: fileError.message,
+            total: 0,
+            categorized: 0,
+            uncategorized: 0
+          };
+        }
+      }
+
+      // Update state
+      setResults(newResults);
+      setUncategorizedData(newUncategorized);
+      setFileStats(newFileStats);
+      setStatementMetadata(newStatementMetadata);
+      setDocumentCounters(newCounters);
+
+      const totalTransactions = Object.values(newResults).reduce((sum, arr) => sum + arr.length, 0) + newUncategorized.length;
+      const totalCategorized = Object.values(newResults).reduce((sum, arr) => sum + arr.length, 0);
+      
+      addLog(`Processing complete! ${totalTransactions} total transactions, ${totalCategorized} categorized, ${newUncategorized.length} uncategorised`, 'success');
+      
+    } catch (error) {
+      addLog(`Processing failed: ${error.message}`, 'error');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // Export with grouping
+  const handleExportWithGrouping = async (groupingConfig) => {
+    if (!results || Object.keys(results).length === 0) {
+      addLog('No data to export', 'error');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      await generateExcelReport(
+        results,
+        uncategorizedData,
+        fileStats,
+        exportMode,
+        documentCounters,
+        statementMetadata,
+        addLog,
+        groupingConfig
+      );
+    } catch (error) {
+      addLog(`Export failed: ${error.message}`, 'error');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // Check if we have results to display
+  const hasResults = results && Object.keys(results).length > 0 && (
+    Object.values(results).some(arr => arr && arr.length > 0) || 
+    (uncategorizedData && uncategorizedData.length > 0)
+  );
+
+  const totalTransactions = hasResults ? 
+    Object.values(results).reduce((sum, arr) => sum + (arr ? arr.length : 0), 0) + (uncategorizedData ? uncategorizedData.length : 0) : 0;
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold text-gray-800">Processing Results</h2>
-        <div className="text-sm text-gray-600">
-          {stats.totalTransactions} total transactions processed
+    <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* Header */}
+        <div className="text-center">
+          <div className="flex items-center justify-center space-x-3 mb-4">
+            <FileText className="h-8 w-8 text-blue-600" />
+            <h1 className="text-3xl font-bold text-gray-900">Bank Statement Processor</h1>
+          </div>
+          <p className="text-lg text-gray-600">
+            Automated transaction categorization and Excel export with enhanced OCR
+          </p>
         </div>
-      </div>
-      
-      {/* Enhanced Balance Summary */}
-      <div className="mb-6 p-4 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg">
-        <h3 className="font-semibold text-gray-800 mb-2">Financial Summary</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-          <div>
-            <div className="text-xl font-bold text-green-600">MUR {stats.openingBalance.toLocaleString()}</div>
-            <div className="text-xs text-gray-600">Total Opening Balance</div>
-          </div>
-          <div>
-            <div className="text-xl font-bold text-blue-600">MUR {stats.closingBalance.toLocaleString()}</div>
-            <div className="text-xs text-gray-600">Total Closing Balance</div>
-          </div>
-          <div>
-            <div className="text-xl font-bold text-purple-600">{stats.categorizedCount}</div>
-            <div className="text-xs text-gray-600">Categorized Transactions</div>
-          </div>
-          <div>
-            <div className="text-xl font-bold text-red-600">{stats.uncategorizedCount}</div>
-            <div className="text-xs text-gray-600">Uncategorised Transactions</div>
-          </div>
-        </div>
-      </div>
 
-      {/* Categorization Success Rate */}
-      <div className="mb-6 p-3 bg-gray-50 rounded-lg">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-gray-700">Categorization Success Rate</span>
-          <span className="text-sm font-bold text-blue-600">
-            {stats.totalTransactions > 0 ? ((stats.categorizedCount / stats.totalTransactions) * 100).toFixed(1) : 0}%
-          </span>
-        </div>
-        <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-          <div 
-            className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-            style={{ 
-              width: `${stats.totalTransactions > 0 ? (stats.categorizedCount / stats.totalTransactions) * 100 : 0}%` 
-            }}
-          />
-        </div>
-      </div>
-
-      {/* Category Grid - Updated for your categories */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {Object.entries(results).map(([category, transactions]) => {
-          if (transactions.length === 0) return null;
-          
-          const categoryTotal = transactions.reduce((sum, t) => sum + t.amount, 0);
-          const isExpanded = expandedCategories[category];
-          const colorClass = categoryColors[category] || 'bg-gray-50 text-gray-800 border-gray-200';
-          
-          return (
-            <div key={category} className={`border rounded-lg overflow-hidden ${colorClass.split(' ')[2]}`}>
-              <div 
-                className={`p-4 ${colorClass} cursor-pointer hover:opacity-80 transition-opacity`}
-                onClick={() => toggleCategory(category)}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-medium text-sm">{category}</h3>
-                  <div className="flex items-center space-x-2">
-                    <span className={`text-xs px-2 py-1 rounded ${colorClass}`}>
-                      {transactions.length}
-                    </span>
-                    {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                  </div>
-                </div>
-                
-                <div className="text-sm mb-2">
-                  Total: MUR {categoryTotal.toLocaleString()}
-                </div>
-                
-                {!isExpanded && (
-                  <div className="text-xs opacity-75">
-                    Click to see {transactions.length} transactions
-                  </div>
-                )}
-              </div>
-              
-              {isExpanded && (
-                <div className="max-h-96 overflow-y-auto border-t bg-white">
-                  {transactions.map((transaction, index) => (
-                    <div key={index} className="p-3 border-b border-gray-100 hover:bg-gray-50">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm text-gray-800 mb-1 break-words">
-                            {transaction.description}
-                          </div>
-                          <div className="flex items-center space-x-4 text-xs text-gray-500">
-                            <span className="flex items-center">
-                              <Calendar className="h-3 w-3 mr-1" />
-                              {transaction.transactionDate}
-                            </span>
-                            <span className="flex items-center">
-                              <DollarSign className="h-3 w-3 mr-1" />
-                              MUR {transaction.amount.toLocaleString()}
-                            </span>
-                            <span className={`px-1 py-0.5 rounded text-xs ${
-                              transaction.isDebit ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'
-                            }`}>
-                              {transaction.isDebit ? 'Debit' : 'Credit'}
-                            </span>
-                          </div>
-                          <div className="text-xs text-gray-400 mt-1">
-                            {transaction.sourceFile && `${transaction.sourceFile.substring(0, 20)}...`}
-                          </div>
-                        </div>
-                        <div className="text-right ml-4">
-                          <div className="text-sm font-medium text-gray-800">
-                            MUR {transaction.balance.toLocaleString()}
-                          </div>
-                          <div className="text-xs text-gray-500">Balance</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        
-        {/* UNCATEGORISED SECTION - Now using your terminology */}
-        {uncategorizedData.length > 0 && (
-          <div className="border border-red-200 rounded-lg overflow-hidden lg:col-span-2 xl:col-span-3">
-            <div className="p-4 bg-red-50">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center space-x-2">
-                  <AlertTriangle className="h-5 w-5 text-red-600" />
-                  <h3 className="font-medium text-red-800">UNCATEGORISED TRANSACTIONS</h3>
-                </div>
-                <div className="flex items-center space-x-3">
-                  <span className="text-sm bg-red-100 text-red-800 px-2 py-1 rounded">
-                    {uncategorizedData.length} transactions
-                  </span>
-                  <button
-                    onClick={() => setShowUncategorizedDetails(!showUncategorizedDetails)}
-                    className="flex items-center space-x-1 text-red-600 hover:text-red-800"
-                  >
-                    {showUncategorizedDetails ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    <span className="text-sm">
-                      {showUncategorizedDetails ? 'Hide' : 'Show'} Details
-                    </span>
-                  </button>
-                </div>
-              </div>
-              
-              <div className="text-sm text-red-600 mb-3">
-                These transactions don't match any of your defined categories and will be exported to a separate "Uncategorised" sheet
-              </div>
-
-              <div className="text-xs text-gray-600">
-                Total Amount: MUR {uncategorizedData.reduce((sum, t) => sum + t.amount, 0).toLocaleString()}
+        {/* File Upload */}
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-gray-800">Upload Bank Statements</h2>
+              <div className="text-sm text-gray-500">
+                Supports PDF files with OCR enhancement
               </div>
             </div>
             
-            {showUncategorizedDetails && (
-              <div className="max-h-96 overflow-y-auto border-t">
-                {uncategorizedData.map((transaction, index) => (
-                  <div key={index} className="p-4 border-b border-red-100 hover:bg-red-25">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm text-gray-800 mb-2 break-words">
-                          {transaction.description}
-                        </div>
-                        <div className="grid grid-cols-2 gap-4 text-xs text-gray-600">
-                          <div>
-                            <span className="font-medium">Date:</span> {transaction.transactionDate}
-                          </div>
-                          <div>
-                            <span className="font-medium">Value Date:</span> {transaction.valueDate}
-                          </div>
-                          <div>
-                            <span className="font-medium">Amount:</span> MUR {transaction.amount.toLocaleString()}
-                          </div>
-                          <div>
-                            <span className="font-medium">Balance:</span> MUR {transaction.balance.toLocaleString()}
-                          </div>
-                          <div className="col-span-2">
-                            <span className="font-medium">Source:</span> {transaction.sourceFile || 'Unknown'}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right ml-4">
-                        <div className={`text-sm font-medium ${transaction.isDebit ? 'text-red-600' : 'text-green-600'}`}>
-                          {transaction.isDebit ? '-' : '+'}MUR {transaction.amount.toLocaleString()}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {transaction.isDebit ? 'Debit' : 'Credit'}
-                        </div>
-                      </div>
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 hover:border-blue-400 transition-colors">
+              <div className="text-center">
+                <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                <div className="space-y-2">
+                  <label className="cursor-pointer">
+                    <span className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors inline-block">
+                      Choose PDF Files
+                    </span>
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                      disabled={processing}
+                    />
+                  </label>
+                  <p className="text-sm text-gray-500">
+                    Select one or more PDF bank statement files
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Selected Files */}
+            {files.length > 0 && (
+              <div className="space-y-2">
+                <h3 className="font-medium text-gray-700">Selected Files ({files.length})</h3>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {files.map((file, index) => (
+                    <div key={index} className="flex items-center space-x-3 text-sm text-gray-600 bg-gray-50 p-2 rounded">
+                      <FileText className="h-4 w-4 text-blue-500" />
+                      <span className="flex-1 truncate">{file.name}</span>
+                      <span className="text-xs">({Math.round(file.size / 1024)} KB)</span>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
+
+            {/* Export Mode Selection */}
+            <div className="border-t pt-4">
+              <h3 className="font-medium text-gray-700 mb-3">Export Mode</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-blue-50 cursor-pointer">
+                  <input
+                    type="radio"
+                    value="combined"
+                    checked={exportMode === 'combined'}
+                    onChange={(e) => setExportMode(e.target.value)}
+                    className="h-4 w-4 text-blue-600"
+                  />
+                  <div>
+                    <div className="font-medium text-gray-800">Combined Excel</div>
+                    <div className="text-sm text-gray-600">Single file with separate sheets per document</div>
+                  </div>
+                </label>
+                
+                <label className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-blue-50 cursor-pointer">
+                  <input
+                    type="radio"
+                    value="separate"
+                    checked={exportMode === 'separate'}
+                    onChange={(e) => setExportMode(e.target.value)}
+                    className="h-4 w-4 text-blue-600"
+                  />
+                  <div>
+                    <div className="font-medium text-gray-800">Separate Files</div>
+                    <div className="text-sm text-gray-600">Individual Excel file per document</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Process Button */}
+            <div className="flex items-center justify-between pt-4 border-t">
+              <div className="flex items-center space-x-4">
+                <button
+                  onClick={() => setShowLogs(!showLogs)}
+                  className="flex items-center space-x-2 text-gray-600 hover:text-gray-800"
+                >
+                  <Eye className="h-4 w-4" />
+                  <span className="text-sm">{showLogs ? 'Hide' : 'Show'} Processing Logs</span>
+                </button>
+              </div>
+              
+              <button
+                onClick={processFiles}
+                disabled={files.length === 0 || processing}
+                className="bg-blue-600 text-white px-8 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-2"
+              >
+                {processing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Settings className="h-4 w-4" />
+                    <span>Process Files</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Processing Logs */}
+        {showLogs && logs.length > 0 && (
+          <div className="bg-white rounded-lg shadow-sm border p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Processing Logs</h3>
+            <div className="max-h-64 overflow-y-auto space-y-1 font-mono text-sm">
+              {logs.map((log, index) => (
+                <div
+                  key={index}
+                  className={`p-2 rounded text-sm ${
+                    log.type === 'error' ? 'bg-red-50 text-red-700' :
+                    log.type === 'warning' ? 'bg-yellow-50 text-yellow-700' :
+                    log.type === 'success' ? 'bg-green-50 text-green-700' :
+                    'bg-gray-50 text-gray-700'
+                  }`}
+                >
+                  <span className="text-gray-500">{log.timestamp}</span> - {log.message}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Results Display */}
+        {hasResults && (
+          <EnhancedResultsDisplay
+            results={results || {}}
+            uncategorizedData={uncategorizedData || []}
+            fileStats={fileStats || {}}
+          />
+        )}
+
+        {/* Export Controls */}
+        {hasResults && (
+          <SimpleGroupingControls
+            onExportWithGrouping={handleExportWithGrouping}
+            processing={processing}
+            exportMode={exportMode}
+            hasResults={hasResults}
+            transactionCount={totalTransactions}
+          />
+        )}
+
+        {/* Processing Status */}
+        {processing && (
+          <div className="fixed bottom-4 right-4 bg-white rounded-lg shadow-lg border p-4 flex items-center space-x-3">
+            <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+            <span className="text-gray-700">Processing documents...</span>
           </div>
         )}
       </div>
-      
-      {/* Updated suggestions for your categories */}
-      {uncategorizedData.length > 0 && (
-        <div className="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <h4 className="font-medium text-yellow-800 mb-2">💡 Suggestions for Uncategorised Items</h4>
-          <div className="text-sm text-yellow-700 space-y-1">
-            <p>• Review transaction descriptions to see if they match your defined categories</p>
-            <p>• Consider adding new patterns to your mapping rules for recurring transactions</p>
-            <p>• Check if transaction descriptions have slight variations from your patterns</p>
-            <p>• Uncategorised transactions will be exported to a separate sheet for manual review</p>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
 
-export default EnhancedResultsDisplay;
+export default BankStatementProcessor;
