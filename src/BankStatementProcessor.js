@@ -22,49 +22,64 @@ const BankStatementProcessor = () => {
   const [documentCounters, setDocumentCounters] = useState({});
   const [showLogs, setShowLogs] = useState(false);
   const [aiEnhancementEnabled, setAiEnhancementEnabled] = useState(true);
-  const [apiStatus, setApiStatus] = useState('unknown'); // 'working', 'error', 'unknown'
+  const [apiStatus, setApiStatus] = useState('unknown');
 
-  // Enhanced categorization mapping with machine learning-like patterns
+  // MCB-specific categorization mapping based on your Excel mapping
   const categoryMapping = {
     'CSG/PRGF': {
-      keywords: ['csg', 'prgf', 'contribution sociale', 'government contribution', 'social security', 'pension fund', 'retirement fund', 'national pension scheme'],
-      patterns: [/csg/i, /prgf/i, /contribution.*sociale/i, /pension.*fund/i]
+      keywords: ['direct debit scheme', 'mauritius revenue authority'],
+      patterns: [/direct\s+debit\s+scheme.*mauritius\s+revenue\s+authority/i]
     },
     'Prime (Scheme)': {
-      keywords: ['prime', 'bonus', 'incentive', 'scheme payment', 'performance bonus', 'end year bonus', 'annual bonus', 'productivity bonus', '13th month'],
-      patterns: [/prime/i, /bonus/i, /incentive/i, /13th.*month/i]
+      keywords: ['interbank transfer', 'mauritius revenue authority', 'paer'],
+      patterns: [/interbank\s+transfer.*mauritius\s+revenue\s+authority.*paer/i]
     },
     'Consultancy Fee': {
-      keywords: ['consultancy', 'consulting fee', 'advisory fee', 'professional service', 'consulting charge', 'expert fee', 'consultation', 'freelance'],
-      patterns: [/consult/i, /advisory/i, /professional.*service/i, /freelance/i]
+      keywords: ['standing order', 'consultancy fee', 'yazak services'],
+      patterns: [/standing\s+order.*consultancy\s+fee.*yazak\s+services/i]
     },
     'Salary': {
-      keywords: ['salary', 'wage', 'staff payment', 'employee payment', 'payroll', 'monthly salary', 'basic salary', 'remuneration', 'staff salary', 'net pay'],
-      patterns: [/salary/i, /wage/i, /payroll/i, /remuneration/i, /net.*pay/i]
+      keywords: ['juicepro transfer', 'miss wadashah sahaboolea'],
+      patterns: [/juicepro\s+transfer.*miss\s+wadashah\s+sahaboolea/i]
     },
     'Purchase/Payment/Expense': {
-      keywords: ['purchase', 'payment', 'expense', 'bill payment', 'utility payment', 'vendor payment', 'supplier payment', 'invoice payment', 'settlement', 'ceb', 'cwa', 'telecom'],
-      patterns: [/purchase/i, /payment.*to/i, /bill.*payment/i, /utility/i, /invoice/i, /ceb/i, /cwa/i]
+      keywords: ['juicepro transfer', 'pastry pro ltd', 'merchant instant payment', 'juice payment'],
+      patterns: [
+        /juicepro\s+transfer.*pastry\s+pro\s+ltd/i,
+        /merchant\s+instant\s+payment/i,
+        /juice\s+payment/i
+      ]
     },
     'Sales': {
-      keywords: ['sales', 'revenue', 'income', 'receipt', 'customer payment', 'sales receipt', 'collection', 'receivable', 'deposit from'],
-      patterns: [/sales/i, /revenue/i, /receipt.*from/i, /collection/i, /deposit.*from/i]
+      keywords: ['juice account transfer', 'account transfer', 'eoy24bcashback'],
+      patterns: [
+        /juice\s+account\s+transfer/i,
+        /account\s+transfer.*eoy24bcashback/i
+      ]
     },
     'Cash withdrawal': {
-      keywords: ['cash withdrawal', 'atm withdrawal', 'cash advance', 'withdraw', 'atm', 'cash out', 'withdrawal'],
-      patterns: [/cash.*withdrawal/i, /atm.*withdrawal/i, /withdraw/i, /cash.*out/i]
+      keywords: ['atm cash withdrawal'],
+      patterns: [/atm\s+cash\s+withdrawal/i]
     },
     'Cash Deposit': {
-      keywords: ['cash deposit', 'deposit', 'cash in', 'lodgement', 'cash lodgement', 'deposit cash', 'cash payment'],
-      patterns: [/cash.*deposit/i, /deposit.*cash/i, /lodgement/i, /cash.*in/i]
+      keywords: ['atm cash deposit', 'cash deposit'],
+      patterns: [/atm\s+cash\s+deposit/i, /cash\s+deposit/i]
     },
     'Bank Charges': {
-      keywords: ['bank charge', 'service charge', 'fee', 'commission', 'bank fee', 'transaction fee', 'maintenance fee', 'processing fee', 'handling charge'],
-      patterns: [/bank.*charge/i, /service.*charge/i, /.*fee$/i, /commission/i, /maintenance.*fee/i]
+      keywords: ['business banking subs fee', 'refill amount', 'vat on refill'],
+      patterns: [
+        /business\s+banking\s+subs\s+fee/i,
+        /refill\s+amount/i,
+        /vat\s+on\s+refill/i
+      ]
     },
     'Transfer': {
-      keywords: ['transfer', 'juice transfer', 'maubank transfer', 'inter bank', 'fund transfer', 'money transfer'],
-      patterns: [/transfer/i, /juice.*transfer/i, /maubank/i, /inter.*bank/i]
+      keywords: ['interbank transfer', 'juicepro transfer', 'cash cheque'],
+      patterns: [
+        /interbank\s+transfer/i,
+        /juicepro\s+transfer/i,
+        /cash\s+cheque/i
+      ]
     }
   };
 
@@ -103,9 +118,8 @@ const BankStatementProcessor = () => {
       details,
       id: Date.now() + Math.random() 
     };
-    setLogs(prev => [logEntry, ...prev.slice(0, 49)]); // Keep last 50 logs
+    setLogs(prev => [logEntry, ...prev.slice(0, 49)]);
     
-    // Console logging with better formatting
     const prefix = `[${type.toUpperCase()}]`;
     const fullMessage = `${prefix} ${message}`;
     
@@ -120,7 +134,7 @@ const BankStatementProcessor = () => {
     const uploadedFiles = Array.from(event.target.files);
     const pdfFiles = uploadedFiles.filter(file => {
       const isValidPdf = file.type === 'application/pdf';
-      const isValidSize = file.size <= 50 * 1024 * 1024; // 50MB limit
+      const isValidSize = file.size <= 50 * 1024 * 1024;
       
       if (!isValidPdf) {
         addLog(`${file.name}: Invalid file type. Only PDF files are supported.`, 'warning');
@@ -149,18 +163,16 @@ const BankStatementProcessor = () => {
     setFileStats({});
     setStatementMetadata({});
     setDocumentCounters({});
-    setLogs(prev => prev.slice(0, 5)); // Keep recent logs but clear processing logs
+    setLogs(prev => prev.slice(0, 5));
   };
 
   // ENHANCED OCR function with Claude AI integration
   const enhanceOCRWithClaude = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
-    // Skip if AI enhancement is disabled
     if (!aiEnhancementEnabled) {
       addLog(`Page ${pageNumber}: AI enhancement disabled, using direct extraction`, 'info');
       return ocrText;
     }
 
-    // Skip if no meaningful text to enhance
     if (!ocrText || ocrText.trim().length < 20) {
       addLog(`Page ${pageNumber}: Insufficient text for AI enhancement`, 'info');
       return ocrText;
@@ -204,7 +216,7 @@ const BankStatementProcessor = () => {
     } catch (error) {
       addLog(`Page ${pageNumber}: AI enhancement failed - ${error.message}`, 'warning');
       addLog(`Page ${pageNumber}: Falling back to original text`, 'info');
-      return ocrText; // Graceful fallback
+      return ocrText;
     }
   };
 
@@ -221,7 +233,6 @@ const BankStatementProcessor = () => {
 
       addLog(`PDF loaded: ${pdf.numPages} pages found`, 'info');
 
-      // Process each page with enhanced error handling
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
         addLog(`Processing page ${pageNum}/${pdf.numPages}...`, 'info');
         
@@ -248,7 +259,6 @@ const BankStatementProcessor = () => {
             addLog(`Page ${pageNum}: Using OCR for text extraction...`, 'info');
             
             try {
-              // Render page to canvas
               const canvas = document.createElement('canvas');
               const canvasContext = canvas.getContext('2d');
               const viewport = page.getViewport({ scale: 2.0 });
@@ -261,10 +271,8 @@ const BankStatementProcessor = () => {
                 viewport: viewport
               }).promise;
               
-              // Convert canvas to base64 for potential AI processing
               const imageData = canvas.toDataURL('image/png').split(',')[1];
               
-              // Try AI-powered OCR first if available
               if (aiEnhancementEnabled) {
                 try {
                   pageText = await enhanceOCRWithClaude(null, imageData, true, pageNum);
@@ -272,11 +280,9 @@ const BankStatementProcessor = () => {
                   addLog(`Page ${pageNum}: AI vision OCR completed`, 'success');
                 } catch (aiError) {
                   addLog(`Page ${pageNum}: AI vision failed, trying Tesseract`, 'warning');
-                  // Fall back to Tesseract
                 }
               }
               
-              // Tesseract fallback if AI failed or is disabled
               if (!pageText || pageText.trim().length < 20) {
                 const ocrResult = await Tesseract.recognize(canvas, 'eng', {
                   logger: m => {
@@ -306,7 +312,6 @@ const BankStatementProcessor = () => {
                 extractionMethod = extractionMethod + '+ai';
               }
             } catch (enhanceError) {
-              // Enhancement failure is not critical, continue with original text
               addLog(`Page ${pageNum}: Text enhancement failed, using original`, 'info');
             }
           }
@@ -358,7 +363,7 @@ const BankStatementProcessor = () => {
     }
   };
 
-  // Enhanced metadata extraction with AI assistance
+  // MCB-specific metadata extraction
   const extractStatementMetadata = async (text, fileName) => {
     const metadata = {
       fileName: fileName,
@@ -368,41 +373,27 @@ const BankStatementProcessor = () => {
       currency: 'MUR',
       openingBalance: 0,
       closingBalance: 0,
-      bankName: null,
-      accountType: null
+      bankName: 'Mauritius Commercial Bank',
+      accountType: 'Current Account'
     };
 
-    // Enhanced extraction patterns
+    // MCB-specific extraction patterns
     const patterns = {
       accountNumber: [
-        /account\s*(?:number|no\.?|#)?\s*:?\s*(\d+)/i,
-        /a\/c\s*(?:no\.?|number)?\s*:?\s*(\d+)/i,
-        /(?:account|a\/c)\s*(\d{8,})/i
+        /Account\s+Number\s*:\s*(\d+)/i,
+        /(\d{12})/
       ],
       iban: [
-        /IBAN\s*:?\s*([A-Z]{2}\d{2}[A-Z\d]+)/i,
-        /International\s+Bank\s+Account\s+Number\s*:?\s*([A-Z]{2}\d{2}[A-Z\d]+)/i
-      ],
-      bankName: [
-        /(mauritius\s+commercial\s+bank|mcb)/i,
-        /(state\s+bank|sbm)/i,
-        /(barclays)/i,
-        /(hsbc)/i,
-        /(standard\s+bank)/i
+        /IBAN:\s*(MU\d{2}[A-Z0-9]+)/i
       ],
       statementPeriod: [
-        /(?:statement|period|from)\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\s+(?:to|until|-)\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i,
-        /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})\s*(?:to|-)\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i
+        /From\s+(\d{2}\/\d{2}\/\d{4})\s+to\s+(\d{2}\/\d{2}\/\d{4})/i
       ],
       openingBalance: [
-        /(?:opening|previous|brought\s+forward|b\/f)\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
-        /balance\s+(?:brought\s+)?forward\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
-        /previous\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i
+        /Opening\s+Balance\s+([\d,]+\.?\d*)/i
       ],
       closingBalance: [
-        /(?:closing|final|current)\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
-        /balance\s+(?:carried\s+)?forward\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i,
-        /current\s+balance\s*:?\s*(?:MUR\s*)?([0-9,]+\.?\d*)/i
+        /Closing\s+Balance\s+([\d,]+\.?\d*)/i
       ]
     };
 
@@ -413,103 +404,94 @@ const BankStatementProcessor = () => {
         if (match) {
           switch (field) {
             case 'accountNumber':
+              metadata[field] = match[1];
+              break;
             case 'iban':
               metadata[field] = match[1];
               break;
-            case 'bankName':
-              metadata[field] = match[1];
-              break;
             case 'statementPeriod':
-              metadata[field] = `${match[1]} to ${match[2]}`;
+              if (match[2]) {
+                metadata[field] = `${match[1]} to ${match[2]}`;
+              }
               break;
             case 'openingBalance':
             case 'closingBalance':
               metadata[field] = parseFloat(match[1].replace(/,/g, '')) || 0;
               break;
           }
-          break; // Use first match
+          break;
         }
       }
     });
 
+    addLog(`Extracted metadata: Opening Balance MUR ${metadata.openingBalance.toLocaleString()}, Closing Balance MUR ${metadata.closingBalance.toLocaleString()}`, 'success');
     return metadata;
   };
 
-  // Enhanced transaction extraction with AI-powered parsing
+  // MCB-specific transaction extraction
   const extractTransactions = async (text, fileName) => {
     const transactions = [];
     const lines = text.split('\n').filter(line => line.trim());
 
-    // Multiple transaction patterns for different bank formats
-    const transactionPatterns = [
-      // Standard format: Date ValueDate Description Amount Balance
-      /(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})?\s*(.+?)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)$/,
-      // Alternative format: Date Description Amount Balance
-      /(\d{1,2}\/\d{1,2}\/\d{4})\s+(.+?)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)$/,
-      // DD-MM-YYYY format
-      /(\d{1,2}-\d{1,2}-\d{4})\s+(\d{1,2}-\d{1,2}-\d{4})?\s*(.+?)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)\s+([+-]?\d{1,3}(?:,\d{3})*\.?\d*)$/
-    ];
+    // MCB transaction pattern: DATE DATE DESCRIPTION DEBIT CREDIT BALANCE
+    const mcbPattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
+    
+    // Alternative pattern for transactions with separate debit/credit columns
+    const mcbTablePattern = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+(?:([\d,]+\.?\d*)\s+)?([\d,]+\.?\d*)\s+([\d,]+\.?\d*)$/;
     
     let transactionCounter = 0;
+    let currentDescription = '';
+    let pendingTransaction = null;
 
-    for (const line of lines) {
-      let matched = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
       
-      for (const pattern of transactionPatterns) {
-        const match = line.match(pattern);
-        if (match) {
-          transactionCounter++;
-          
-          let transactionDate, valueDate, description, amountStr, balanceStr;
-          
-          if (match.length === 6) {
-            // Format with value date
-            [, transactionDate, valueDate, description, amountStr, balanceStr] = match;
-            valueDate = valueDate || transactionDate;
-          } else {
-            // Format without value date
-            [, transactionDate, description, amountStr, balanceStr] = match;
-            valueDate = transactionDate;
-          }
-
-          // Clean and parse amounts
-          const cleanAmount = amountStr.replace(/[,\s]/g, '');
-          const cleanBalance = balanceStr.replace(/[,\s]/g, '');
-          
-          const amount = Math.abs(parseFloat(cleanAmount));
-          const balance = parseFloat(cleanBalance);
-          
-          // Determine if it's a debit
-          const isDebit = cleanAmount.includes('-') || 
-                          description.toLowerCase().includes('withdrawal') || 
-                          description.toLowerCase().includes('charge') ||
-                          description.toLowerCase().includes('fee');
-
-          // Clean description
-          description = description.replace(/\s+/g, ' ').trim();
-
-          if (!isNaN(amount) && !isNaN(balance) && amount > 0) {
-            transactions.push({
-              transactionDate: transactionDate.replace(/-/g, '/'), // Normalize date format
-              valueDate: valueDate.replace(/-/g, '/'),
-              description,
-              amount,
-              balance,
-              isDebit,
-              sourceFile: fileName,
-              transactionId: `${fileName}_${transactionCounter}`,
-              rawLine: line // Keep original for debugging
-            });
-          }
-          
-          matched = true;
-          break;
-        }
+      // Skip empty lines and headers
+      if (!line || line.includes('TRANS DATE') || line.includes('BALANCE') || line.includes('Current Account')) {
+        continue;
       }
+
+      // Try to match MCB transaction format
+      let match = line.match(mcbTablePattern);
       
-      if (!matched && line.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/) && line.match(/\d+/)) {
-        // Potential transaction line that didn't match patterns
-        addLog(`Potential missed transaction: ${line.substring(0, 100)}...`, 'warning');
+      if (match) {
+        transactionCounter++;
+        
+        const [, transactionDate, valueDate, description, debit = '', credit = '', balance] = match;
+        
+        // Clean and parse amounts
+        const debitAmount = debit ? parseFloat(debit.replace(/,/g, '')) || 0 : 0;
+        const creditAmount = credit ? parseFloat(credit.replace(/,/g, '')) || 0 : 0;
+        const balanceAmount = parseFloat(balance.replace(/,/g, '')) || 0;
+        
+        // Determine actual amount and type
+        const amount = debitAmount > 0 ? debitAmount : creditAmount;
+        const isDebit = debitAmount > 0;
+        
+        if (amount > 0) {
+          const transaction = {
+            transactionDate: transactionDate,
+            valueDate: valueDate,
+            description: description.trim(),
+            amount,
+            balance: balanceAmount,
+            isDebit,
+            sourceFile: fileName,
+            transactionId: `${fileName}_${transactionCounter}`,
+            rawLine: line
+          };
+          
+          transactions.push(transaction);
+          addLog(`Transaction ${transactionCounter}: ${description.substring(0, 50)}... - MUR ${amount.toLocaleString()}`, 'info');
+        }
+      } else {
+        // Check if this line is a continuation of the previous transaction description
+        const datePattern = /^\d{2}\/\d{2}\/\d{4}/;
+        if (!datePattern.test(line) && transactions.length > 0) {
+          // This might be a continuation line
+          const lastTransaction = transactions[transactions.length - 1];
+          lastTransaction.description += ' ' + line.trim();
+        }
       }
     }
 
@@ -517,7 +499,7 @@ const BankStatementProcessor = () => {
     return transactions;
   };
 
-  // Enhanced categorization with pattern matching and confidence scoring
+  // Enhanced categorization with MCB-specific patterns
   const categorizeTransaction = (transaction) => {
     const description = transaction.description.toLowerCase();
     let bestMatch = null;
@@ -527,7 +509,7 @@ const BankStatementProcessor = () => {
       let score = 0;
       let matchedItem = null;
       
-      // Check exact keyword matches (higher weight)
+      // Check exact keyword matches
       for (const keyword of config.keywords) {
         if (description.includes(keyword.toLowerCase())) {
           score += 3;
@@ -536,7 +518,7 @@ const BankStatementProcessor = () => {
         }
       }
       
-      // Check pattern matches (medium weight)
+      // Check pattern matches
       if (config.patterns) {
         for (const pattern of config.patterns) {
           if (pattern.test(description)) {
@@ -546,66 +528,24 @@ const BankStatementProcessor = () => {
         }
       }
       
-      // Fuzzy matching for similar words (low weight)
-      for (const keyword of config.keywords) {
-        const similarity = calculateSimilarity(description, keyword.toLowerCase());
-        if (similarity > 0.7) {
-          score += 1;
-          if (!matchedItem) matchedItem = `~${keyword}`;
-        }
-      }
-      
       if (score > bestScore) {
         bestScore = score;
         bestMatch = {
           category,
           matchedKeyword: matchedItem,
-          confidence: Math.min(score / 3, 1.0) // Normalize to 0-1
+          confidence: Math.min(score / 3, 1.0)
         };
       }
     }
     
-    // Require minimum confidence threshold
     if (bestMatch && bestMatch.confidence >= 0.6) {
       return bestMatch;
     }
     
-    return null; // No confident match found
+    return null;
   };
 
-  // Simple similarity calculation
-  const calculateSimilarity = (str1, str2) => {
-    const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
-    const editDistance = getEditDistance(longer, shorter);
-    return (longer.length - editDistance) / longer.length;
-  };
-
-  const getEditDistance = (str1, str2) => {
-    const matrix = [];
-    for (let i = 0; i <= str2.length; i++) {
-      matrix[i] = [i];
-    }
-    for (let j = 0; j <= str1.length; j++) {
-      matrix[0][j] = j;
-    }
-    for (let i = 1; i <= str2.length; i++) {
-      for (let j = 1; j <= str1.length; j++) {
-        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
-          matrix[i][j] = matrix[i - 1][j - 1];
-        } else {
-          matrix[i][j] = Math.min(
-            matrix[i - 1][j - 1] + 1,
-            matrix[i][j - 1] + 1,
-            matrix[i - 1][j] + 1
-          );
-        }
-      }
-    }
-    return matrix[str2.length][str1.length];
-  };
-
-  // Main processing function with enhanced error handling and progress tracking
+  // Main processing function
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('No files selected for processing.', 'error');
@@ -627,30 +567,30 @@ const BankStatementProcessor = () => {
     });
 
     try {
-      addLog(`🚀 Starting processing of ${files.length} file(s)...`, 'info');
+      addLog(`Starting processing of ${files.length} file(s)...`, 'info');
       addLog(`AI Enhancement: ${aiEnhancementEnabled ? 'Enabled' : 'Disabled'}`, 'info');
       
       for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
         const file = files[fileIndex];
         
         try {
-          addLog(`📄 Processing file ${fileIndex + 1}/${files.length}: ${file.name}`, 'info');
+          addLog(`Processing file ${fileIndex + 1}/${files.length}: ${file.name}`, 'info');
           
-          // Extract text from PDF with detailed progress
+          // Extract text from PDF
           const extractionResult = await processPDF(file);
           const extractedText = extractionResult.text;
           
-          // Extract metadata with AI enhancement
-          addLog(`🔍 Extracting metadata from ${file.name}...`, 'info');
+          // Extract metadata
+          addLog(`Extracting metadata from ${file.name}...`, 'info');
           const metadata = await extractStatementMetadata(extractedText, file.name);
           newStatementMetadata[file.name] = metadata;
           
-          // Extract transactions with enhanced parsing
-          addLog(`💰 Extracting transactions from ${file.name}...`, 'info');
+          // Extract transactions
+          addLog(`Extracting transactions from ${file.name}...`, 'info');
           const transactions = await extractTransactions(extractedText, file.name);
           
           if (transactions.length === 0) {
-            addLog(`⚠️ No transactions found in ${file.name}. This might indicate a parsing issue.`, 'warning');
+            addLog(`No transactions found in ${file.name}. This might indicate a parsing issue.`, 'warning');
             newFileStats[file.name] = {
               status: 'warning',
               message: 'No transactions extracted',
@@ -662,13 +602,12 @@ const BankStatementProcessor = () => {
             continue;
           }
           
-          addLog(`✅ Extracted ${transactions.length} transactions from ${file.name}`, 'success');
+          addLog(`Extracted ${transactions.length} transactions from ${file.name}`, 'success');
           
-          // Categorize transactions with confidence tracking
-          addLog(`🏷️ Categorizing transactions from ${file.name}...`, 'info');
+          // Categorize transactions
+          addLog(`Categorizing transactions from ${file.name}...`, 'info');
           let categorized = 0;
           let uncategorized = 0;
-          let highConfidenceCount = 0;
           
           for (const transaction of transactions) {
             const categoryResult = categorizeTransaction(transaction);
@@ -680,10 +619,6 @@ const BankStatementProcessor = () => {
               
               newResults[categoryResult.category].push(transaction);
               categorized++;
-              
-              if (categoryResult.confidence > 0.8) {
-                highConfidenceCount++;
-              }
             } else {
               transaction.category = 'Uncategorized';
               transaction.reason = 'No matching pattern found';
@@ -692,24 +627,22 @@ const BankStatementProcessor = () => {
             }
           }
           
-          // Store detailed file statistics
           newFileStats[file.name] = {
             status: 'success',
             total: transactions.length,
             categorized: categorized,
             uncategorized: uncategorized,
             successRate: transactions.length > 0 ? ((categorized / transactions.length) * 100).toFixed(1) : 0,
-            highConfidenceCount,
             extractionDetails: extractionResult.pageDetails,
             metadata: metadata
           };
 
           newCounters[file.name] = { processed: transactions.length };
           
-          addLog(`✅ ${file.name}: ${categorized} categorized (${highConfidenceCount} high confidence), ${uncategorized} uncategorized`, 'success');
+          addLog(`${file.name}: ${categorized} categorized, ${uncategorized} uncategorized`, 'success');
           
         } catch (fileError) {
-          addLog(`❌ Failed to process ${file.name}: ${fileError.message}`, 'error');
+          addLog(`Failed to process ${file.name}: ${fileError.message}`, 'error');
           newFileStats[file.name] = {
             status: 'error',
             error: fileError.message,
@@ -727,28 +660,26 @@ const BankStatementProcessor = () => {
       setStatementMetadata(newStatementMetadata);
       setDocumentCounters(newCounters);
 
-      // Calculate final statistics
       const totalTransactions = Object.values(newResults).reduce((sum, arr) => sum + arr.length, 0) + newUncategorized.length;
       const totalCategorized = Object.values(newResults).reduce((sum, arr) => sum + arr.length, 0);
       const successRate = totalTransactions > 0 ? ((totalCategorized / totalTransactions) * 100).toFixed(1) : 0;
-      const highConfidenceTransactions = Object.values(newResults).flat().filter(t => t.confidence > 0.8).length;
       
-      addLog(`🎉 Processing complete!`, 'success');
-      addLog(`📊 Summary: ${totalTransactions} total transactions, ${totalCategorized} categorized (${successRate}%), ${highConfidenceTransactions} high confidence`, 'success');
+      addLog(`Processing complete!`, 'success');
+      addLog(`Summary: ${totalTransactions} total transactions, ${totalCategorized} categorized (${successRate}%)`, 'success');
       
       if (newUncategorized.length > 0) {
-        addLog(`⚠️ ${newUncategorized.length} transactions need manual review`, 'warning');
+        addLog(`${newUncategorized.length} transactions need manual review`, 'warning');
       }
       
     } catch (error) {
-      addLog(`💥 Processing failed: ${error.message}`, 'error');
+      addLog(`Processing failed: ${error.message}`, 'error');
       console.error('Processing error:', error);
     } finally {
       setProcessing(false);
     }
   };
 
-  // Enhanced export with grouping
+  // Enhanced export with category-based sheets
   const handleExportWithGrouping = async (groupingConfig) => {
     if (!results || Object.keys(results).length === 0) {
       addLog('No data to export', 'error');
@@ -757,7 +688,7 @@ const BankStatementProcessor = () => {
 
     try {
       setProcessing(true);
-      addLog('🚀 Starting Excel export...', 'info');
+      addLog('Starting Excel export with category sheets...', 'info');
       
       await generateExcelReport(
         results,
@@ -770,9 +701,9 @@ const BankStatementProcessor = () => {
         groupingConfig
       );
       
-      addLog('✅ Excel export completed successfully!', 'success');
+      addLog('Excel export completed successfully!', 'success');
     } catch (error) {
-      addLog(`❌ Export failed: ${error.message}`, 'error');
+      addLog(`Export failed: ${error.message}`, 'error');
     } finally {
       setProcessing(false);
     }
@@ -790,7 +721,7 @@ const BankStatementProcessor = () => {
   return (
     <div className="min-h-screen bg-gradient-to-r from-blue-50 to-indigo-100 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-7xl mx-auto space-y-8">
-        {/* Enhanced Header */}
+        {/* Header */}
         <div className="text-center">
           <div className="flex items-center justify-center space-x-3 mb-4">
             <div className="relative">
@@ -799,13 +730,13 @@ const BankStatementProcessor = () => {
                 <Zap className="h-4 w-4 text-yellow-500 absolute -top-1 -right-1" />
               )}
             </div>
-            <h1 className="text-3xl font-bold text-gray-900">AI-Powered Bank Statement Processor</h1>
+            <h1 className="text-3xl font-bold text-gray-900">MCB Bank Statement Processor</h1>
           </div>
           <p className="text-lg text-gray-600">
-            Advanced transaction categorization with Claude AI enhancement
+            Advanced MCB transaction categorization with Claude AI enhancement
           </p>
           
-          {/* API Status Indicator */}
+          {/* API Status */}
           <div className="mt-4 inline-flex items-center space-x-2 px-3 py-1 rounded-full text-sm">
             {apiStatus === 'working' ? (
               <>
@@ -826,11 +757,11 @@ const BankStatementProcessor = () => {
           </div>
         </div>
 
-        {/* Enhanced File Upload Section */}
+        {/* File Upload Section */}
         <div className="bg-white rounded-lg shadow-sm border p-6">
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-gray-800">Upload Bank Statements</h2>
+              <h2 className="text-xl font-semibold text-gray-800">Upload MCB Bank Statements</h2>
               <div className="flex items-center space-x-4">
                 <label className="flex items-center space-x-2 text-sm">
                   <input
@@ -868,13 +799,13 @@ const BankStatementProcessor = () => {
                     />
                   </label>
                   <p className="text-sm text-gray-500">
-                    Select one or more PDF bank statement files (up to 50MB each)
+                    Select one or more MCB PDF bank statement files (up to 50MB each)
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Enhanced Selected Files Display */}
+            {/* Selected Files Display */}
             {files.length > 0 && (
               <div className="space-y-2">
                 <h3 className="font-medium text-gray-700">Selected Files ({files.length})</h3>
@@ -909,7 +840,7 @@ const BankStatementProcessor = () => {
                   />
                   <div>
                     <div className="font-medium text-gray-800">Combined Workbook</div>
-                    <div className="text-sm text-gray-600">Single Excel file with multiple sheets</div>
+                    <div className="text-sm text-gray-600">Single Excel file with category-based sheets</div>
                   </div>
                 </label>
                 
@@ -929,7 +860,7 @@ const BankStatementProcessor = () => {
               </div>
             </div>
 
-            {/* Enhanced Process Button */}
+            {/* Process Button */}
             <div className="flex items-center justify-between pt-4 border-t">
               <div className="flex items-center space-x-4">
                 <button
@@ -959,7 +890,7 @@ const BankStatementProcessor = () => {
                 ) : (
                   <>
                     <Settings className="h-4 w-4" />
-                    <span>Process Files</span>
+                    <span>Process MCB Statements</span>
                     {aiEnhancementEnabled && <Zap className="h-4 w-4" />}
                   </>
                 )}
@@ -968,7 +899,7 @@ const BankStatementProcessor = () => {
           </div>
         </div>
 
-        {/* Enhanced Processing Logs */}
+        {/* Processing Logs */}
         {showLogs && logs.length > 0 && (
           <div className="bg-white rounded-lg shadow-sm border p-6">
             <div className="flex items-center justify-between mb-4">
@@ -999,11 +930,6 @@ const BankStatementProcessor = () => {
                     {log.type === 'error' && <AlertCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />}
                     {log.type === 'success' && <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0 mt-0.5" />}
                   </div>
-                  {log.details && (
-                    <div className="mt-2 text-xs font-mono text-gray-600 bg-gray-100 p-2 rounded">
-                      {JSON.stringify(log.details, null, 2)}
-                    </div>
-                  )}
                 </div>
               ))}
             </div>
@@ -1030,12 +956,12 @@ const BankStatementProcessor = () => {
           />
         )}
 
-        {/* Enhanced Processing Status */}
+        {/* Processing Status */}
         {processing && (
           <div className="fixed bottom-4 right-4 bg-white rounded-lg shadow-xl border-2 border-blue-200 p-4 flex items-center space-x-3 min-w-0 max-w-sm">
             <Loader2 className="h-6 w-6 animate-spin text-blue-600 flex-shrink-0" />
             <div className="min-w-0">
-              <div className="text-gray-800 font-medium">Processing documents...</div>
+              <div className="text-gray-800 font-medium">Processing MCB statements...</div>
               <div className="text-sm text-gray-600">
                 {aiEnhancementEnabled ? 'Using AI enhancement' : 'Standard processing'}
               </div>
