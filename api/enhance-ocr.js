@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // Enhanced CORS headers for production
+  // Enhanced CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     });
   }
 
-  // Enhanced API key validation
+  // Validate API key
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error('ANTHROPIC_API_KEY not found in environment variables');
     return res.status(500).json({ 
@@ -40,7 +40,7 @@ export default async function handler(req, res) {
   try {
     const { ocrText, imageData, isImage, pageNumber } = req.body;
     
-    // Enhanced input validation
+    // Input validation
     if (!ocrText && !imageData) {
       return res.status(400).json({ 
         error: 'Bad request',
@@ -48,31 +48,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // Validate image data if provided
-    if (isImage && imageData) {
-      if (typeof imageData !== 'string' || imageData.length < 100) {
-        return res.status(400).json({
-          error: 'Bad request',
-          message: 'Invalid image data format'
-        });
-      }
-    }
-
-    // Validate text data if provided
-    if (ocrText && (typeof ocrText !== 'string' || ocrText.trim().length < 10)) {
-      return res.status(400).json({
-        error: 'Bad request',
-        message: 'Text content too short for meaningful processing'
-      });
-    }
-    
     console.log(`Processing page ${pageNumber || 1}: ${isImage ? 'Image OCR' : 'Text Enhancement'}`);
     
     if (isImage && imageData) {
-      // Enhanced Image OCR with Claude Vision
+      // IMAGE OCR with Claude Vision - Enhanced for MCB Bank Statements
       const visionPayload = {
         model: "claude-3-5-sonnet-20241022",
         max_tokens: 4000,
+        temperature: 0.1, // Low temperature for accuracy
         messages: [
           { 
             role: "user", 
@@ -87,46 +70,67 @@ export default async function handler(req, res) {
               },
               {
                 type: "text",
-                text: `This is page ${pageNumber || 1} of a bank statement. Please extract ALL transaction data with maximum accuracy.
+                text: `You are extracting data from page ${pageNumber || 1} of a Mauritius Commercial Bank (MCB) statement.
 
-CRITICAL REQUIREMENTS:
-1. Extract EVERY transaction visible on this page
-2. For each transaction, identify:
-   - Transaction date (DD/MM/YYYY format)
-   - Value date (if different from transaction date)  
-   - Complete description/details
-   - Amount (preserve exact numbers)
-   - Running balance after transaction
-   - Whether it's a debit (-) or credit (+)
+CRITICAL EXTRACTION REQUIREMENTS:
 
-3. PRESERVE ALL NUMERICAL VALUES EXACTLY as shown
-4. Include account information if visible (account number, IBAN, etc.)
-5. Include statement period and balance information
-6. Maintain the original structure and order of transactions
+1. BALANCE INFORMATION (HIGHEST PRIORITY):
+   - Look for "Opening Balance", "Balance Brought Forward", "Balance B/F", "Solde Initial"
+   - Look for "Closing Balance", "Balance Carried Forward", "Balance C/F", "Solde Final"
+   - These are usually at the top and bottom of the statement
+   - Extract the EXACT numerical values with all decimal places
 
-FORMATTING REQUIREMENTS:
-- Return clean, structured text that maintains the bank statement's tabular format
-- Each transaction should be on its own line
-- Use consistent spacing between columns
-- Ensure dates are in DD/MM/YYYY format
-- Include currency symbols where present
-- Preserve all decimal places in amounts
+2. STATEMENT METADATA:
+   - Account number (usually 10-12 digits)
+   - Statement period (From DD/MM/YYYY to DD/MM/YYYY)
+   - Account holder name
+   - Currency (usually MUR)
+   - Page number
 
-QUALITY ASSURANCE:
-- Double-check all numbers for accuracy
-- Ensure no transactions are missed
-- Verify date formats are consistent
-- Make sure descriptions are complete and readable
+3. TRANSACTION DATA:
+   Extract EVERY transaction with these exact fields:
+   - Transaction Date (DD/MM/YYYY format)
+   - Value Date (DD/MM/YYYY format - may be same as transaction date)
+   - Description (complete text, including reference numbers)
+   - Debit amount (if applicable)
+   - Credit amount (if applicable)
+   - Balance after transaction
 
-Return the extracted text as it would appear on a perfectly clean, digitized bank statement.`
+4. MCB SPECIFIC PATTERNS:
+   Common transaction types to recognize:
+   - ATM CASH WITHDRAWAL / RETRAIT
+   - CASH DEPOSIT / VERSEMENT
+   - STANDING ORDER / ORDRE PERMANENT
+   - DIRECT DEBIT SCHEME
+   - INTERBANK TRANSFER
+   - MERCHANT INSTANT PAYMENT
+   - JUICEPRO TRANSFER
+   - POS transactions
+   - Bank charges and fees
+
+5. FORMATTING REQUIREMENTS:
+   - Preserve the exact structure as shown on the statement
+   - Keep dates in DD/MM/YYYY format
+   - Keep amounts with exactly 2 decimal places
+   - Include currency symbols where shown (MUR, Rs)
+   - Maintain the tabular structure
+
+6. QUALITY CHECKS:
+   - Ensure ALL transactions are captured (double-check for any missed lines)
+   - Verify opening balance + transactions = closing balance
+   - Check that all amounts are numeric and properly formatted
+   - Ensure descriptions are complete (not cut off)
+
+IMPORTANT: This is a financial document. Accuracy is critical. Extract EVERY piece of information exactly as shown.
+
+Return the extracted text maintaining the original statement's structure and format.`
               }
             ]
           }
-        ],
-        temperature: 0.1 // Low temperature for maximum accuracy
+        ]
       };
 
-      console.log('Sending vision request to Claude...');
+      console.log('Sending vision request to Claude for MCB statement extraction...');
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -140,9 +144,8 @@ Return the extracted text as it would appear on a perfectly clean, digitized ban
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`Claude Vision API error: ${response.status} ${response.statusText}`, errorText);
+        console.error(`Claude Vision API error: ${response.status}`, errorText);
         
-        // Enhanced error handling for different status codes
         if (response.status === 401) {
           throw new Error('API authentication failed - please check your API key');
         } else if (response.status === 429) {
@@ -150,7 +153,7 @@ Return the extracted text as it would appear on a perfectly clean, digitized ban
         } else if (response.status === 413) {
           throw new Error('Image too large - please reduce image size');
         } else {
-          throw new Error(`Vision API request failed: ${response.status} ${response.statusText}`);
+          throw new Error(`Vision API request failed: ${response.status}`);
         }
       }
 
@@ -161,75 +164,104 @@ Return the extracted text as it would appear on a perfectly clean, digitized ban
       }
       
       const extractedText = data.content[0].text;
-      console.log(`Vision OCR completed for page ${pageNumber}: ${extractedText.length} characters extracted`);
+      console.log(`Vision OCR completed: ${extractedText.length} characters extracted`);
+      
+      // Validate MCB content
+      const isMCB = extractedText.toLowerCase().includes('mauritius commercial bank') || 
+                    extractedText.toLowerCase().includes('mcb') ||
+                    extractedText.toLowerCase().includes('mcb.mu');
       
       res.status(200).json({ 
         ocrText: extractedText,
-        method: 'claude-vision',
+        method: 'claude-vision-mcb',
         pageNumber: pageNumber || 1,
+        isMCBDocument: isMCB,
         timestamp: new Date().toISOString()
       });
       
     } else {
-      // Enhanced Text Enhancement with Claude
+      // TEXT ENHANCEMENT with Claude - Enhanced for MCB format
       const textPayload = {
         model: "claude-3-5-sonnet-20241022",
         max_tokens: 4000,
+        temperature: 0.1,
         messages: [
           { 
             role: "user", 
-            content: `You are an expert at cleaning and structuring OCR-extracted text from bank statements. This is page ${pageNumber || 1} of a bank statement that needs enhancement.
+            content: `You are processing OCR text from page ${pageNumber || 1} of a Mauritius Commercial Bank (MCB) statement.
 
 ORIGINAL OCR TEXT:
 ${ocrText}
 
-ENHANCEMENT TASKS:
-1. Fix OCR errors:
-   - Correct '0' vs 'O' confusion in numbers
-   - Fix garbled characters and spacing issues
-   - Repair broken words and merged text
-   - Standardize punctuation and formatting
+ENHANCEMENT TASKS FOR MCB STATEMENTS:
 
-2. Structure transaction data:
-   - Align transaction columns properly
-   - Ensure consistent date formatting (DD/MM/YYYY)
-   - Clean up numerical formatting (amounts and balances)
-   - Preserve original transaction order
-   - Fix description text that may be split across lines
+1. CRITICAL BALANCE EXTRACTION:
+   - Find and clearly mark OPENING BALANCE (may appear as "Balance Brought Forward", "Balance B/F", "Solde Initial")
+   - Find and clearly mark CLOSING BALANCE (may appear as "Balance Carried Forward", "Balance C/F", "Solde Final")
+   - These balances MUST be preserved with exact numerical values
 
-3. Standardize formatting:
-   - Consistent spacing between data columns
-   - Proper alignment of numerical values
-   - Clear separation between different transactions
-   - Maintain readable table structure
+2. FIX MCB-SPECIFIC OCR ERRORS:
+   - Fix common OCR issues: 0 vs O, 1 vs l, 5 vs S in numbers
+   - Repair MCB transaction types:
+     * ATM CASH WITHDRAWAL (not "ATH CASH MITHDRAMAL")
+     * STANDING ORDER (not "STANDINC 0RDER")
+     * DIRECT DEBIT SCHEME (not "DIRECT DEB1T 5CHEME")
+     * INTERBANK TRANSFER (not "INTERBANK TRAN5FER")
+   - Fix "MUR" currency indicators (not "HUR" or "MUP")
 
-4. Preserve accuracy:
-   - Never change numerical values unless fixing obvious OCR errors
-   - Keep all original transaction data
-   - Don't invent or guess missing information
-   - Maintain the exact sequence of transactions
+3. STRUCTURE TRANSACTION DATA:
+   MCB statements typically follow this pattern:
+   [Transaction Date] [Value Date] [Description] [Debit] [Credit] [Balance]
+   
+   OR sometimes:
+   [Transaction Date] [Value Date] [Debit] [Credit] [Description] [Balance]
+   
+   Ensure each transaction line follows one of these patterns consistently.
 
-5. Bank statement elements to preserve:
-   - Account numbers and identifiers
-   - Statement periods and dates
-   - Opening and closing balances
-   - All transaction details
-   - Bank name and branch information
+4. STANDARDIZE MCB TRANSACTION DESCRIPTIONS:
+   Common MCB transactions to recognize and fix:
+   - ATM transactions (withdrawals and deposits)
+   - Standing orders with beneficiary names
+   - Direct debit schemes (often for utilities, insurance)
+   - Interbank transfers (local and international)
+   - JuicePro transfers (MCB's mobile banking)
+   - POS/Merchant payments
+   - Bank charges and fees
+   - Cash deposits and withdrawals
 
-CRITICAL REQUIREMENTS:
-- Maintain 100% accuracy of financial data
-- Fix only obvious OCR errors, don't interpret or guess
-- Preserve the tabular structure for easy parsing
-- Ensure each transaction is clearly separated
-- Return clean, professionally formatted text
+5. PRESERVE CRITICAL INFORMATION:
+   - Account numbers (10-12 digits)
+   - Statement period dates
+   - Transaction reference numbers
+   - All monetary amounts with exactly 2 decimal places
+   - Running balance after each transaction
 
-Return the enhanced text that looks like a perfect, cleanly formatted bank statement page.`
+6. DATE FORMAT STANDARDIZATION:
+   - Ensure all dates are in DD/MM/YYYY format
+   - Fix common date OCR errors (e.g., "O1/O3/2024" → "01/03/2024")
+
+7. AMOUNT FORMAT STANDARDIZATION:
+   - All amounts should have 2 decimal places (e.g., "1000" → "1000.00")
+   - Remove any spurious characters from amounts
+   - Ensure thousands separators are commas (e.g., "1,234.56")
+
+VALIDATION CHECKLIST:
+✓ Opening balance is clearly marked and visible
+✓ Closing balance is clearly marked and visible
+✓ All transactions have dates in DD/MM/YYYY format
+✓ All amounts are numeric with 2 decimal places
+✓ Transaction descriptions are complete and readable
+✓ The document is identifiable as an MCB statement
+
+IMPORTANT: This is a financial document from MCB. Maintain 100% accuracy of all numerical values.
+Never change amounts unless fixing obvious OCR errors (like O instead of 0).
+
+Return the enhanced text in a clean, structured format that preserves the tabular nature of the bank statement.`
           }
-        ],
-        temperature: 0.1 // Low temperature for consistency
+        ]
       };
 
-      console.log('Sending text enhancement request to Claude...');
+      console.log('Sending text enhancement request to Claude for MCB statement...');
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -242,14 +274,14 @@ Return the enhanced text that looks like a perfect, cleanly formatted bank state
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error(`Claude Text API error: ${response.status} ${response.statusText}`, errorText);
+        console.error(`Claude Text API error: ${response.status}`, errorText);
         
         if (response.status === 401) {
           throw new Error('API authentication failed - please check your API key');
         } else if (response.status === 429) {
           throw new Error('API rate limit exceeded - please try again in a moment');
         } else {
-          throw new Error(`Text enhancement API request failed: ${response.status} ${response.statusText}`);
+          throw new Error(`Text enhancement API request failed: ${response.status}`);
         }
       }
 
@@ -260,14 +292,40 @@ Return the enhanced text that looks like a perfect, cleanly formatted bank state
       }
       
       const enhancedText = data.content[0].text;
-      console.log(`Text enhancement completed for page ${pageNumber}: ${enhancedText.length} characters`);
+      console.log(`Text enhancement completed: ${enhancedText.length} characters`);
+      
+      // Validate MCB content and extract key information
+      const isMCB = enhancedText.toLowerCase().includes('mauritius commercial bank') || 
+                    enhancedText.toLowerCase().includes('mcb') ||
+                    enhancedText.toLowerCase().includes('mcb.mu');
+      
+      // Try to extract opening and closing balance for validation
+      let openingBalance = null;
+      let closingBalance = null;
+      
+      const openingMatch = enhancedText.match(/opening\s+balance[:\s]*([\d,]+\.?\d*)/i) ||
+                           enhancedText.match(/balance\s+brought\s+forward[:\s]*([\d,]+\.?\d*)/i);
+      if (openingMatch) {
+        openingBalance = parseFloat(openingMatch[1].replace(/,/g, ''));
+      }
+      
+      const closingMatch = enhancedText.match(/closing\s+balance[:\s]*([\d,]+\.?\d*)/i) ||
+                           enhancedText.match(/balance\s+carried\s+forward[:\s]*([\d,]+\.?\d*)/i);
+      if (closingMatch) {
+        closingBalance = parseFloat(closingMatch[1].replace(/,/g, ''));
+      }
       
       res.status(200).json({ 
         enhancedText: enhancedText,
         originalLength: ocrText.length,
         enhancedLength: enhancedText.length,
-        method: 'claude-text-enhancement',
+        method: 'claude-text-enhancement-mcb',
         pageNumber: pageNumber || 1,
+        isMCBDocument: isMCB,
+        extractedBalances: {
+          opening: openingBalance,
+          closing: closingBalance
+        },
         timestamp: new Date().toISOString()
       });
     }
@@ -275,27 +333,12 @@ Return the enhanced text that looks like a perfect, cleanly formatted bank state
   } catch (error) {
     console.error('Enhancement error:', error);
     
-    // Detailed error response for debugging
     const errorResponse = {
       error: 'Enhancement failed',
       message: error.message,
       timestamp: new Date().toISOString(),
       pageNumber: req.body?.pageNumber || 'unknown'
     };
-    
-    // Include debugging info in development
-    if (process.env.NODE_ENV === 'development') {
-      errorResponse.stack = error.stack;
-      errorResponse.details = {
-        apiKeyExists: !!process.env.ANTHROPIC_API_KEY,
-        apiKeyLength: process.env.ANTHROPIC_API_KEY ? process.env.ANTHROPIC_API_KEY.length : 0,
-        apiKeyPrefix: process.env.ANTHROPIC_API_KEY ? process.env.ANTHROPIC_API_KEY.substring(0, 15) + '...' : 'Not found',
-        requestBodyKeys: req.body ? Object.keys(req.body) : null,
-        hasImageData: !!(req.body?.imageData),
-        hasOcrText: !!(req.body?.ocrText),
-        textLength: req.body?.ocrText ? req.body.ocrText.length : 0
-      };
-    }
     
     // Determine appropriate error status code
     let statusCode = 500;
