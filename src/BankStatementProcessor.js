@@ -5,11 +5,16 @@ import Tesseract from 'tesseract.js';
 import EnhancedResultsDisplay from './components/EnhancedResultsDisplay';
 import SimpleGroupingControls from './components/SimpleGroupingControls';
 import { generateExcelReport } from './utils/excelExport';
+import { trackStatementProcessing } from './config/firebase';
+import { useAuth } from './contexts/AuthContext';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
 const BankStatementProcessor = () => {
+  // Get current user from Auth context
+  const { currentUser } = useAuth();
+  
   // State management
   const [files, setFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -755,6 +760,17 @@ const BankStatementProcessor = () => {
           
           successfulFiles++;
           addLog(`📊 ${file.name} Summary: Debits: MUR ${totalDebits.toLocaleString()} (${newFileStats[file.name].debitCount}), Credits: MUR ${totalCredits.toLocaleString()} (${newFileStats[file.name].creditCount})`, 'success');
+          
+          // Track in Firebase (passive - doesn't affect processing)
+          if (currentUser) {
+            trackStatementProcessing(currentUser.uid, {
+              fileName: file.name,
+              transactionCount: transactions.length,
+              successRate: newFileStats[file.name].successRate,
+              processingMode: aiEnhancementEnabled ? 'AI-Enhanced' : 'Pure OCR',
+              fileSize: file.size
+            }).catch(err => console.log('Firebase tracking error:', err));
+          }
           
         } catch (error) {
           addLog(`❌ Failed: ${file.name}: ${error.message}`, 'error');
