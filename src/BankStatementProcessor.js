@@ -138,7 +138,7 @@ const BankStatementProcessor = () => {
 
   const checkAPIStatus = async () => {
     try {
-      setCurrentStep('Checking Claude API status...');
+      setCurrentStep('Checking AI enhancement status...');
       
       const apiUrl = process.env.NODE_ENV === 'development' 
         ? 'http://localhost:3000/api/debug'
@@ -155,7 +155,7 @@ const BankStatementProcessor = () => {
         setApiStatus('working');
         setAiAvailable(true);
         setAiEnhancementEnabled(false);
-        addLog('✅ Claude AI available - Toggle ON to use AI enhancement', 'success');
+        addLog('✅ AI enhancement available - Toggle ON to use AI-powered processing', 'success');
       } else {
         setApiStatus('error');
         setAiAvailable(false);
@@ -178,9 +178,9 @@ const BankStatementProcessor = () => {
       const newState = !aiEnhancementEnabled;
       setAiEnhancementEnabled(newState);
       if (newState) {
-        addLog('🤖 AI Enhancement ENABLED - Will use Claude for better accuracy', 'success');
+        addLog('🤖 AI Enhancement ENABLED - Will use advanced AI for better accuracy', 'success');
       } else {
-        addLog('🔍 AI Enhancement DISABLED - Using pure OCR mode', 'info');
+        addLog('🔍 AI Enhancement DISABLED - Using standard OCR mode', 'info');
       }
     } else {
       addLog('❌ AI not available - Cannot enable', 'error');
@@ -252,7 +252,7 @@ const BankStatementProcessor = () => {
   };
 
   // Extract text with AI enhancement - Only if enabled
-  const enhanceOCRWithClaude = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
+  const enhanceOCRWithAI = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
     if (!aiAvailable || !aiEnhancementEnabled || forceOCR) {
       console.log('AI enhancement disabled or not available, returning original text');
       return ocrText;
@@ -311,7 +311,7 @@ const BankStatementProcessor = () => {
   const processPDF = async (file) => {
     try {
       addLog(`📄 Processing: ${file.name}`, 'info');
-      addLog(`Mode: ${aiEnhancementEnabled ? '🤖 AI-Enhanced' : '🔍 Pure OCR'}`, 'info');
+      addLog(`Mode: ${aiEnhancementEnabled ? '🤖 AI-Enhanced' : '🔍 Standard OCR'}`, 'info');
       
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -352,14 +352,14 @@ const BankStatementProcessor = () => {
           
           if (aiEnhancementEnabled && aiAvailable) {
             const imageData = canvas.toDataURL('image/png').split(',')[1];
-            pageText = await enhanceOCRWithClaude(null, imageData, true, pageNum);
+            pageText = await enhanceOCRWithAI(null, imageData, true, pageNum);
           } else {
             const result = await Tesseract.recognize(canvas, 'eng');
             pageText = result.data.text;
             addLog(`Page ${pageNum}: Tesseract OCR complete`, 'success');
           }
         } else if (aiEnhancementEnabled && aiAvailable && pageText) {
-          pageText = await enhanceOCRWithClaude(pageText, null, false, pageNum);
+          pageText = await enhanceOCRWithAI(pageText, null, false, pageNum);
         }
         
         pageTexts.push({ pageNumber: pageNum, text: pageText });
@@ -755,7 +755,7 @@ const BankStatementProcessor = () => {
             creditCount: transactions.filter(t => !t.isDebit).length,
             successRate: transactions.length > 0 ? ((categorized / transactions.length) * 100).toFixed(1) : 0,
             metadata: metadata,
-            processingMode: aiEnhancementEnabled ? 'AI-Enhanced' : 'Pure OCR'
+            processingMode: aiEnhancementEnabled ? 'AI-Enhanced' : 'Standard OCR'
           };
           
           successfulFiles++;
@@ -767,7 +767,7 @@ const BankStatementProcessor = () => {
               fileName: file.name,
               transactionCount: transactions.length,
               successRate: newFileStats[file.name].successRate,
-              processingMode: aiEnhancementEnabled ? 'AI-Enhanced' : 'Pure OCR',
+              processingMode: aiEnhancementEnabled ? 'AI-Enhanced' : 'Standard OCR',
               fileSize: file.size
             }).catch(err => console.log('Firebase tracking error:', err));
           }
@@ -802,7 +802,7 @@ const BankStatementProcessor = () => {
       const totalCategorized = Object.values(newResults).reduce((sum, arr) => sum + arr.length, 0);
       
       addLog(`✅ Processing complete! ${totalTransactions} transactions found`, 'success');
-      addLog(`📊 Mode used: ${aiEnhancementEnabled ? '🤖 AI-Enhanced' : '🔍 Pure OCR'}`, 'info');
+      addLog(`📊 Mode used: ${aiEnhancementEnabled ? '🤖 AI-Enhanced' : '🔍 Standard OCR'}`, 'info');
       addLog(`📈 Documents processed: ${successfulFiles} successful, ${failedFiles} failed`, 'info');
       if (newUncategorized.length > 0) {
         addLog(`⚠️ ${newUncategorized.length} uncategorized transactions need review`, 'warning');
@@ -910,7 +910,7 @@ const BankStatementProcessor = () => {
               ) : aiAvailable ? (
                 <>
                   <span className={`text-sm font-medium ${!aiEnhancementEnabled ? 'text-blue-700' : 'text-gray-500'}`}>
-                    🔍 Pure OCR
+                    🔍 Standard OCR
                   </span>
                   
                   <button
@@ -1011,10 +1011,6 @@ const BankStatementProcessor = () => {
             </div>
           </div>
         )}
-
-        {/* Rest of your existing UI components remain unchanged */}
-        {/* File Upload, Selected Files, Export Mode, Actions, Processing Status, Logs, Results Display sections */}
-        {/* ... (keeping all existing sections as they are) ... */}
 
         {/* File Upload */}
         <div className="bg-white rounded-xl shadow-lg p-6">
