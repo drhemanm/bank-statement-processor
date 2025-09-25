@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileText, AlertCircle, CheckCircle, Loader2, Eye, Settings, Zap, XCircle, FileWarning, DollarSign, TrendingUp, TrendingDown, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Upload, FileText, AlertCircle, CheckCircle, Loader2, Eye, Settings, Zap, XCircle, FileWarning, DollarSign, TrendingUp, TrendingDown, ToggleLeft, ToggleRight, Activity, BarChart3 } from 'lucide-react';
 import * as pdfjsLib from 'pdfjs-dist';
 import Tesseract from 'tesseract.js';
 import EnhancedResultsDisplay from './components/EnhancedResultsDisplay';
@@ -22,11 +22,19 @@ const BankStatementProcessor = () => {
   const [exportMode, setExportMode] = useState('combined');
   const [showLogs, setShowLogs] = useState(true);
   const [aiEnhancementEnabled, setAiEnhancementEnabled] = useState(false);
-  const [aiAvailable, setAiAvailable] = useState(false); // Track if AI is available
+  const [aiAvailable, setAiAvailable] = useState(false);
   const [apiStatus, setApiStatus] = useState('checking');
   const [debugMode, setDebugMode] = useState(false);
   const [validationErrors, setValidationErrors] = useState({});
-  const [forceOCR, setForceOCR] = useState(false); // NEW: Force OCR mode even if AI is available
+  const [forceOCR, setForceOCR] = useState(false);
+  
+  // DOCUMENT COUNTER STATES
+  const [documentCounter, setDocumentCounter] = useState({
+    total: 0,
+    thisSession: 0,
+    successful: 0,
+    failed: 0
+  });
 
   // Enhanced MCB-specific categorization mapping with all transaction types
   const categoryMapping = {
@@ -88,6 +96,36 @@ const BankStatementProcessor = () => {
     }
   };
 
+  // Load saved counter from localStorage on mount
+  useEffect(() => {
+    const savedCounter = localStorage.getItem('mcbDocumentCounter');
+    if (savedCounter) {
+      try {
+        const parsed = JSON.parse(savedCounter);
+        setDocumentCounter(prev => ({
+          ...prev,
+          total: parsed.total || 0,
+          successful: parsed.successful || 0,
+          failed: parsed.failed || 0
+        }));
+      } catch (e) {
+        console.error('Error loading counter:', e);
+      }
+    }
+  }, []);
+
+  // Save counter to localStorage whenever it updates
+  useEffect(() => {
+    if (documentCounter.total > 0) {
+      localStorage.setItem('mcbDocumentCounter', JSON.stringify({
+        total: documentCounter.total,
+        successful: documentCounter.successful,
+        failed: documentCounter.failed,
+        lastUpdated: new Date().toISOString()
+      }));
+    }
+  }, [documentCounter]);
+
   // Check API status on mount
   useEffect(() => {
     checkAPIStatus();
@@ -110,8 +148,8 @@ const BankStatementProcessor = () => {
       
       if (data.apiTestResult?.status === 'SUCCESS') {
         setApiStatus('working');
-        setAiAvailable(true); // AI is available
-        setAiEnhancementEnabled(false); // But start with it disabled by default
+        setAiAvailable(true);
+        setAiEnhancementEnabled(false);
         addLog('✅ Claude AI available - Toggle ON to use AI enhancement', 'success');
       } else {
         setApiStatus('error');
@@ -210,7 +248,6 @@ const BankStatementProcessor = () => {
 
   // Extract text with AI enhancement - Only if enabled
   const enhanceOCRWithClaude = async (ocrText, imageData = null, isImage = false, pageNumber = 1) => {
-    // Check if AI is both available AND enabled by user
     if (!aiAvailable || !aiEnhancementEnabled || forceOCR) {
       console.log('AI enhancement disabled or not available, returning original text');
       return ocrText;
@@ -317,7 +354,6 @@ const BankStatementProcessor = () => {
             addLog(`Page ${pageNum}: Tesseract OCR complete`, 'success');
           }
         } else if (aiEnhancementEnabled && aiAvailable && pageText) {
-          // Enhance extracted text with AI only if enabled
           pageText = await enhanceOCRWithClaude(pageText, null, false, pageNum);
         }
         
@@ -487,45 +523,38 @@ const BankStatementProcessor = () => {
             transaction.amount = debitAmount;
             transaction.isDebit = true;
           } else {
-            // If both are 0, use balance comparison
             transaction.amount = Math.abs(transaction.balance - currentBalance);
           }
         }
 
-        // CRITICAL FIX: Determine debit/credit based on balance change
+        // Determine debit/credit based on balance change
         if (pattern.type !== 'debit-credit-columns' || (match[4] === undefined && match[5] === undefined)) {
           if (currentBalance > 0) {
             if (transaction.balance > currentBalance) {
-              // Balance increased = CREDIT (money came in)
               transaction.isDebit = false;
               if (debugMode) {
                 addLog(`Credit: ${transaction.description.substring(0, 30)}... Balance: ${currentBalance.toFixed(2)} → ${transaction.balance.toFixed(2)}`, 'info');
               }
             } else if (transaction.balance < currentBalance) {
-              // Balance decreased = DEBIT (money went out)
               transaction.isDebit = true;
               if (debugMode) {
                 addLog(`Debit: ${transaction.description.substring(0, 30)}... Balance: ${currentBalance.toFixed(2)} → ${transaction.balance.toFixed(2)}`, 'info');
               }
             } else {
-              // Balance unchanged - check description
               const desc = transaction.description.toLowerCase();
               transaction.isDebit = !isLikelyCredit(desc);
             }
           } else {
-            // First transaction - compare with opening balance if available
             const openingBal = statementMetadata[fileName]?.openingBalance || 0;
             if (openingBal > 0) {
               transaction.isDebit = transaction.balance < openingBal;
             } else {
-              // Fallback to description analysis
               const desc = transaction.description.toLowerCase();
               transaction.isDebit = !isLikelyCredit(desc);
             }
           }
         }
 
-        // Update current balance for next comparison
         if (transaction.balance > 0) {
           currentBalance = transaction.balance;
         }
@@ -536,7 +565,7 @@ const BankStatementProcessor = () => {
       }
       
       if (transactions.length > 0) {
-        break; // Use first successful pattern
+        break;
       }
     }
 
@@ -547,24 +576,22 @@ const BankStatementProcessor = () => {
       return dateA - dateB;
     });
 
-    // Final validation pass - ensure debit/credit logic is correct
+    // Final validation pass
     if (transactions.length > 0) {
       let prevBalance = statementMetadata[fileName]?.openingBalance || 0;
       
       transactions.forEach((trans, index) => {
         if (prevBalance > 0) {
-          // Double-check: did balance go up or down?
           if (trans.balance > prevBalance) {
-            trans.isDebit = false; // Definitely a credit
+            trans.isDebit = false;
           } else if (trans.balance < prevBalance) {
-            trans.isDebit = true;  // Definitely a debit
+            trans.isDebit = true;
           }
         }
         prevBalance = trans.balance;
       });
     }
 
-    // Log summary
     const debits = transactions.filter(t => t.isDebit).length;
     const credits = transactions.filter(t => !t.isDebit).length;
     const totalDebits = transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
@@ -588,9 +615,7 @@ const BankStatementProcessor = () => {
     let bestMatch = null;
     let bestScore = 0;
     
-    // Special handling for credit transactions
     if (!transaction.isDebit) {
-      // Credit-specific categorization
       if (description.includes('salary') || description.includes('wage')) {
         return { category: 'Salary', confidence: 0.95 };
       }
@@ -608,18 +633,15 @@ const BankStatementProcessor = () => {
       }
     }
     
-    // Check all categories
     for (const [category, config] of Object.entries(categoryMapping)) {
       let score = 0;
       
-      // Check keywords
       for (const keyword of config.keywords) {
         if (description.includes(keyword.toLowerCase())) {
           score += 2;
         }
       }
       
-      // Check patterns
       for (const pattern of config.patterns) {
         if (pattern.test(description)) {
           score += 3;
@@ -635,7 +657,7 @@ const BankStatementProcessor = () => {
     return bestMatch && bestMatch.confidence >= 0.4 ? bestMatch : null;
   };
 
-  // Main processing function
+  // Main processing function - UPDATED WITH COUNTER
   const processFiles = async () => {
     if (files.length === 0) {
       addLog('❌ No files selected', 'error');
@@ -645,19 +667,26 @@ const BankStatementProcessor = () => {
     setProcessing(true);
     setCurrentStep('Starting processing...');
     
+    // Update session counter
+    setDocumentCounter(prev => ({
+      ...prev,
+      thisSession: prev.thisSession + files.length
+    }));
+    
     const newResults = {};
     const newUncategorized = [];
     const newFileStats = {};
     const newStatementMetadata = {};
 
-    // Initialize categories
     Object.keys(categoryMapping).forEach(category => {
       newResults[category] = [];
     });
-    // Add Refund category if not in mapping
     if (!newResults['Refund']) {
       newResults['Refund'] = [];
     }
+
+    let successfulFiles = 0;
+    let failedFiles = 0;
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -665,10 +694,8 @@ const BankStatementProcessor = () => {
         setCurrentStep(`Processing ${file.name} (${i + 1}/${files.length})`);
         
         try {
-          // Extract text
           const extractionResult = await processPDF(file);
           
-          // Validate MCB document
           if (!validateMCBDocument(extractionResult.text, file.name)) {
             newFileStats[file.name] = {
               status: 'error',
@@ -677,18 +704,16 @@ const BankStatementProcessor = () => {
               categorized: 0,
               uncategorized: 0
             };
+            failedFiles++;
             continue;
           }
           
-          // Extract metadata FIRST (important for transaction detection)
           const metadata = extractStatementMetadata(extractionResult.text, file.name);
           newStatementMetadata[file.name] = metadata;
-          setStatementMetadata(prev => ({ ...prev, [file.name]: metadata })); // Update state immediately
+          setStatementMetadata(prev => ({ ...prev, [file.name]: metadata }));
           
-          // Extract transactions (will use metadata for balance comparison)
           const transactions = extractTransactions(extractionResult.text, file.name);
           
-          // Categorize transactions
           let categorized = 0;
           let uncategorized = 0;
           
@@ -711,7 +736,6 @@ const BankStatementProcessor = () => {
             }
           }
           
-          // Calculate actual debits and credits
           const totalDebits = transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
           const totalCredits = transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
           
@@ -729,6 +753,7 @@ const BankStatementProcessor = () => {
             processingMode: aiEnhancementEnabled ? 'AI-Enhanced' : 'Pure OCR'
           };
           
+          successfulFiles++;
           addLog(`📊 ${file.name} Summary: Debits: MUR ${totalDebits.toLocaleString()} (${newFileStats[file.name].debitCount}), Credits: MUR ${totalCredits.toLocaleString()} (${newFileStats[file.name].creditCount})`, 'success');
           
         } catch (error) {
@@ -740,8 +765,17 @@ const BankStatementProcessor = () => {
             categorized: 0,
             uncategorized: 0
           };
+          failedFiles++;
         }
       }
+
+      // Update total counters
+      setDocumentCounter(prev => ({
+        ...prev,
+        total: prev.total + successfulFiles,
+        successful: prev.successful + successfulFiles,
+        failed: prev.failed + failedFiles
+      }));
 
       setResults(newResults);
       setUncategorizedData(newUncategorized);
@@ -753,6 +787,7 @@ const BankStatementProcessor = () => {
       
       addLog(`✅ Processing complete! ${totalTransactions} transactions found`, 'success');
       addLog(`📊 Mode used: ${aiEnhancementEnabled ? '🤖 AI-Enhanced' : '🔍 Pure OCR'}`, 'info');
+      addLog(`📈 Documents processed: ${successfulFiles} successful, ${failedFiles} failed`, 'info');
       if (newUncategorized.length > 0) {
         addLog(`⚠️ ${newUncategorized.length} uncategorized transactions need review`, 'warning');
       }
@@ -796,6 +831,47 @@ const BankStatementProcessor = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-8 px-4">
       <div className="max-w-7xl mx-auto space-y-6">
+        {/* Document Counter Section - NEW! */}
+        <div className="bg-white rounded-xl shadow-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <BarChart3 className="h-6 w-6 text-blue-600" />
+              <h3 className="text-lg font-semibold text-gray-800">Document Processing Statistics</h3>
+            </div>
+            <button
+              onClick={() => {
+                if (window.confirm('Reset all counters?')) {
+                  setDocumentCounter({ total: 0, thisSession: 0, successful: 0, failed: 0 });
+                  localStorage.removeItem('mcbDocumentCounter');
+                  addLog('📊 Counters reset', 'info');
+                }
+              }}
+              className="text-sm text-gray-500 hover:text-gray-700"
+            >
+              Reset
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+            <div className="bg-blue-50 rounded-lg p-3">
+              <p className="text-xs text-blue-600 font-medium">Total Processed</p>
+              <p className="text-2xl font-bold text-blue-900">{documentCounter.total}</p>
+            </div>
+            <div className="bg-green-50 rounded-lg p-3">
+              <p className="text-xs text-green-600 font-medium">Successful</p>
+              <p className="text-2xl font-bold text-green-900">{documentCounter.successful}</p>
+            </div>
+            <div className="bg-red-50 rounded-lg p-3">
+              <p className="text-xs text-red-600 font-medium">Failed</p>
+              <p className="text-2xl font-bold text-red-900">{documentCounter.failed}</p>
+            </div>
+            <div className="bg-purple-50 rounded-lg p-3">
+              <p className="text-xs text-purple-600 font-medium">This Session</p>
+              <p className="text-2xl font-bold text-purple-900">{documentCounter.thisSession}</p>
+            </div>
+          </div>
+        </div>
+
         {/* Header */}
         <div className="text-center">
           <div className="flex items-center justify-center space-x-3 mb-4">
@@ -807,7 +883,7 @@ const BankStatementProcessor = () => {
             Convert MCB PDF statements to organized Excel with {aiEnhancementEnabled ? 'AI-powered' : 'OCR'} extraction
           </p>
           
-          {/* Processing Mode Selector - NEW UI! */}
+          {/* Processing Mode Selector */}
           <div className="mt-4 inline-flex items-center space-x-4 px-4 py-2 rounded-full bg-white shadow-sm">
             <div className="flex items-center space-x-2">
               {apiStatus === 'checking' ? (
@@ -846,7 +922,6 @@ const BankStatementProcessor = () => {
             </div>
           </div>
           
-          {/* Mode Description */}
           {aiAvailable && (
             <div className="mt-2 text-sm text-gray-600">
               {aiEnhancementEnabled ? (
@@ -920,6 +995,10 @@ const BankStatementProcessor = () => {
             </div>
           </div>
         )}
+
+        {/* Rest of your existing UI components remain unchanged */}
+        {/* File Upload, Selected Files, Export Mode, Actions, Processing Status, Logs, Results Display sections */}
+        {/* ... (keeping all existing sections as they are) ... */}
 
         {/* File Upload */}
         <div className="bg-white rounded-xl shadow-lg p-6">
