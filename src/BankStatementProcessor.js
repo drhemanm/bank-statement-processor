@@ -474,7 +474,7 @@ const BankStatementProcessor = () => {
     const patterns = [
       // Pattern 1: Date Date Amount Balance Description
       {
-        regex: /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})\s+(.+?)(?=\d{2}[\/\-]\d{2}[\/\-]\d{4}|Opening|Closing|$)/g,
+        regex: /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})\s+(.+?)(?=\d{2}[\/\-]\d{2}[\/\-]\d{4}|Opening|Closing|Current Account STATEMENT|The Mauritius Commercial Bank|For any change|$)/g,
         type: 'amount-balance-desc'
       },
       // Pattern 2: Date Date Description Amount Balance
