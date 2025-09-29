@@ -574,6 +574,62 @@ const BankStatementProcessor = () => {
       }
     }
 
+    // RECOVERY: Capture any missed end-of-page transactions
+    // This catches transactions that appear right before page breaks
+    const pageEndPattern = /(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+(\d{2}[\/\-]\d{2}[\/\-]\d{4})\s+([^0-9\n]+?)\s+([\d,]+\.?\d{2})\s+([\d,]+\.?\d{2})\s*(?=[\r\n]|$)/gm;
+    
+    let recoveryMatch;
+    let recoveredCount = 0;
+    
+    while ((recoveryMatch = pageEndPattern.exec(cleanedText)) !== null) {
+      const checkDate = recoveryMatch[1];
+      const checkBalance = parseFloat(recoveryMatch[5].replace(/,/g, ''));
+      
+      // Check if this transaction already exists (by date and balance)
+      const exists = transactions.some(t => 
+        t.transactionDate === checkDate && 
+        Math.abs(t.balance - checkBalance) < 0.01
+      );
+      
+      if (!exists) {
+        transactionCounter++;
+        
+        const recoveredTransaction = {
+          transactionDate: recoveryMatch[1],
+          valueDate: recoveryMatch[2],
+          description: recoveryMatch[3].trim(),
+          amount: parseFloat(recoveryMatch[4].replace(/,/g, '')),
+          balance: checkBalance,
+          isDebit: true, // Will be corrected by balance logic below
+          sourceFile: fileName,
+          transactionId: `${fileName}_${transactionCounter}`
+        };
+        
+        // Determine debit/credit based on balance change
+        if (currentBalance > 0) {
+          if (recoveredTransaction.balance > currentBalance) {
+            recoveredTransaction.isDebit = false;
+          } else if (recoveredTransaction.balance < currentBalance) {
+            recoveredTransaction.isDebit = true;
+          } else {
+            const desc = recoveredTransaction.description.toLowerCase();
+            recoveredTransaction.isDebit = !isLikelyCredit(desc);
+          }
+        }
+        
+        transactions.push(recoveredTransaction);
+        recoveredCount++;
+        
+        if (debugMode) {
+          addLog(`🔧 Recovered end-of-page transaction: ${recoveredTransaction.description.substring(0, 30)}...`, 'info');
+        }
+      }
+    }
+    
+    if (recoveredCount > 0) {
+      addLog(`✅ Recovered ${recoveredCount} end-of-page transaction(s)`, 'success');
+    }
+
     // Sort transactions by date
     transactions.sort((a, b) => {
       const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
