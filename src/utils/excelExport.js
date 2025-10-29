@@ -1,4 +1,5 @@
 // Enhanced Excel Export for MCB Bank Statements
+// FIXED VERSION - Properly separates transaction data into columns
 
 const loadXLSX = () => {
   return new Promise((resolve) => {
@@ -16,13 +17,21 @@ const loadXLSX = () => {
 
 // Helper function to format currency
 const formatCurrency = (amount) => {
-  return `MUR ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (amount === null || amount === undefined || isNaN(amount)) return 'MUR 0.00';
+  return `MUR ${parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
 // Helper function to format date
 const formatDate = (dateStr) => {
   if (!dateStr) return '';
   return dateStr;
+};
+
+// Helper to safely parse numbers
+const safeParseFloat = (value) => {
+  if (value === null || value === undefined || value === '') return 0;
+  const parsed = parseFloat(value);
+  return isNaN(parsed) ? 0 : parsed;
 };
 
 export const generateExcelReport = async (
@@ -101,8 +110,8 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
     Object.entries(results).forEach(([category, transactions]) => {
       const categoryTrans = transactions.filter(t => t.sourceFile === fileName);
       if (categoryTrans.length > 0) {
-        const debits = categoryTrans.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
-        const credits = categoryTrans.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+        const debits = categoryTrans.filter(t => t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
+        const credits = categoryTrans.filter(t => !t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
         totalDebits += debits;
         totalCredits += credits;
         
@@ -119,8 +128,8 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
     // Add uncategorized summary
     const fileUncategorized = uncategorizedData.filter(t => t.sourceFile === fileName);
     if (fileUncategorized.length > 0) {
-      const uncatDebits = fileUncategorized.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
-      const uncatCredits = fileUncategorized.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+      const uncatDebits = fileUncategorized.filter(t => t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
+      const uncatCredits = fileUncategorized.filter(t => !t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
       totalDebits += uncatDebits;
       totalCredits += uncatCredits;
       
@@ -147,11 +156,11 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
     
     // Apply column widths
     coverSheet['!cols'] = [
-      { width: 30 },
-      { width: 20 },
-      { width: 20 },
-      { width: 20 },
-      { width: 20 }
+      { wch: 30 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 20 }
     ];
     
     XLSX.utils.book_append_sheet(wb, coverSheet, "Summary");
@@ -176,9 +185,13 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
 
     // Sort by date
     allFileTrans.sort((a, b) => {
-      const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
-      const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
-      return dateA - dateB;
+      try {
+        const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+        const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+        return dateA - dateB;
+      } catch (e) {
+        return 0;
+      }
     });
 
     allFileTrans.forEach(transaction => {
@@ -186,9 +199,9 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
         formatDate(transaction.transactionDate),
         formatDate(transaction.valueDate),
         transaction.description,
-        transaction.isDebit ? transaction.amount : '',
-        !transaction.isDebit ? transaction.amount : '',
-        transaction.balance,
+        transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+        !transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+        safeParseFloat(transaction.balance),
         transaction.category,
         transaction.isDebit ? 'Debit' : 'Credit'
       ]);
@@ -196,19 +209,19 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
 
     const allTransSheet = XLSX.utils.aoa_to_sheet(allTransData);
     allTransSheet['!cols'] = [
-      { width: 12 },
-      { width: 12 },
-      { width: 40 },
-      { width: 15 },
-      { width: 15 },
-      { width: 15 },
-      { width: 20 },
-      { width: 10 }
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 50 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 20 },
+      { wch: 10 }
     ];
     
     XLSX.utils.book_append_sheet(wb, allTransSheet, "All Transactions");
 
-    // 3. CATEGORY SHEETS
+    // 3. CATEGORY SHEETS - FIXED: Each field in its own column
     Object.entries(results).forEach(([category, transactions]) => {
       const categoryTrans = transactions.filter(t => t.sourceFile === fileName);
       if (categoryTrans.length === 0) return;
@@ -218,39 +231,44 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
         [''],
         ['Summary:'],
         [`Total Transactions: ${categoryTrans.length}`],
-        [`Total Debits: ${formatCurrency(categoryTrans.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
-        [`Total Credits: ${formatCurrency(categoryTrans.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
+        [`Total Debits: ${formatCurrency(categoryTrans.filter(t => t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0))}`],
+        [`Total Credits: ${formatCurrency(categoryTrans.filter(t => !t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0))}`],
         [''],
         ['Transaction Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Confidence']
       ];
 
       categoryTrans
         .sort((a, b) => {
-          const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
-          const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
-          return dateA - dateB;
+          try {
+            const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+            const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+            return dateA - dateB;
+          } catch (e) {
+            return 0;
+          }
         })
         .forEach(transaction => {
+          // CRITICAL FIX: Each field goes into its own column
           categoryData.push([
             formatDate(transaction.transactionDate),
             formatDate(transaction.valueDate),
-            transaction.description,
-            transaction.isDebit ? transaction.amount : '',
-            !transaction.isDebit ? transaction.amount : '',
-            transaction.balance,
+            transaction.description || '',
+            transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+            !transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+            safeParseFloat(transaction.balance),
             transaction.confidence ? `${(transaction.confidence * 100).toFixed(0)}%` : 'N/A'
           ]);
         });
 
       const categorySheet = XLSX.utils.aoa_to_sheet(categoryData);
       categorySheet['!cols'] = [
-        { width: 12 },
-        { width: 12 },
-        { width: 40 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 12 }
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 50 },
+        { wch: 15 },
+        { wch: 15 },
+        { wch: 15 },
+        { wch: 12 }
       ];
 
       const sheetName = category.replace(/[\/\\*?[\]]/g, '_').substring(0, 31);
@@ -266,25 +284,29 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
         ['Please review each transaction and assign appropriate categories.'],
         [''],
         [`Total Uncategorized: ${fileUncategorized.length}`],
-        [`Total Amount: ${formatCurrency(fileUncategorized.reduce((sum, t) => sum + t.amount, 0))}`],
+        [`Total Amount: ${formatCurrency(fileUncategorized.reduce((sum, t) => sum + safeParseFloat(t.amount), 0))}`],
         [''],
         ['Transaction Date', 'Value Date', 'Description', 'Debit', 'Credit', 'Balance', 'Suggested Category', 'Notes']
       ];
 
       fileUncategorized
         .sort((a, b) => {
-          const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
-          const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
-          return dateA - dateB;
+          try {
+            const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+            const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+            return dateA - dateB;
+          } catch (e) {
+            return 0;
+          }
         })
         .forEach(transaction => {
           uncategorizedSheetData.push([
             formatDate(transaction.transactionDate),
             formatDate(transaction.valueDate),
-            transaction.description,
-            transaction.isDebit ? transaction.amount : '',
-            !transaction.isDebit ? transaction.amount : '',
-            transaction.balance,
+            transaction.description || '',
+            transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+            !transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+            safeParseFloat(transaction.balance),
             '[Manual Entry Required]',
             transaction.reason || 'No matching pattern found'
           ]);
@@ -292,14 +314,14 @@ const generateSeparateFiles = async (XLSX, results, uncategorizedData, fileStats
 
       const uncategorizedSheet = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
       uncategorizedSheet['!cols'] = [
-        { width: 12 },
-        { width: 12 },
-        { width: 40 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 20 },
-        { width: 30 }
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 50 },
+        { wch: 15 },
+        { wch: 15 },
+        { wch: 15 },
+        { wch: 20 },
+        { wch: 30 }
       ];
 
       XLSX.utils.book_append_sheet(wb, uncategorizedSheet, "⚠️ UNCATEGORIZED");
@@ -374,12 +396,12 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
   summaryData.push(['Category', 'Transaction Count', 'Total Debits', 'Total Credits', 'Net Amount', '% of Total']);
 
   const allTransactions = Object.values(results).flat().concat(uncategorizedData);
-  const totalAmount = allTransactions.reduce((sum, t) => sum + t.amount, 0);
+  const totalAmount = allTransactions.reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
 
   Object.entries(results).forEach(([category, transactions]) => {
     if (transactions.length > 0) {
-      const debits = transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
-      const credits = transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+      const debits = transactions.filter(t => t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
+      const credits = transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
       const percentage = totalAmount > 0 ? ((debits + credits) / totalAmount * 100).toFixed(1) : '0.0';
       
       summaryData.push([
@@ -395,8 +417,8 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
 
   // Add uncategorized summary
   if (uncategorizedData.length > 0) {
-    const uncatDebits = uncategorizedData.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0);
-    const uncatCredits = uncategorizedData.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0);
+    const uncatDebits = uncategorizedData.filter(t => t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
+    const uncatCredits = uncategorizedData.filter(t => !t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0);
     const percentage = totalAmount > 0 ? ((uncatDebits + uncatCredits) / totalAmount * 100).toFixed(1) : '0.0';
     
     summaryData.push([
@@ -411,12 +433,12 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
 
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
   summarySheet['!cols'] = [
-    { width: 35 },
-    { width: 20 },
-    { width: 20 },
-    { width: 20 },
-    { width: 20 },
-    { width: 15 }
+    { wch: 35 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 15 }
   ];
   
   XLSX.utils.book_append_sheet(wb, summarySheet, "Summary");
@@ -430,40 +452,44 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
 
   allTransactions
     .sort((a, b) => {
-      const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
-      const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
-      return dateA - dateB;
+      try {
+        const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+        const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+        return dateA - dateB;
+      } catch (e) {
+        return 0;
+      }
     })
     .forEach(transaction => {
       allTransData.push([
         formatDate(transaction.transactionDate),
         formatDate(transaction.valueDate),
-        transaction.description,
-        transaction.isDebit ? transaction.amount : '',
-        !transaction.isDebit ? transaction.amount : '',
-        transaction.balance,
+        transaction.description || '',
+        transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+        !transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+        safeParseFloat(transaction.balance),
         transaction.category || 'Uncategorized',
         transaction.isDebit ? 'Debit' : 'Credit',
-        transaction.sourceFile
+        transaction.sourceFile || ''
       ]);
     });
 
   const allTransSheet = XLSX.utils.aoa_to_sheet(allTransData);
   allTransSheet['!cols'] = [
-    { width: 12 },
-    { width: 12 },
-    { width: 40 },
-    { width: 15 },
-    { width: 15 },
-    { width: 15 },
-    { width: 20 },
-    { width: 10 },
-    { width: 30 }
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 50 },
+    { wch: 15 },
+    { wch: 15 },
+    { wch: 15 },
+    { wch: 20 },
+    { wch: 10 },
+    { wch: 40 }
   ];
   
   XLSX.utils.book_append_sheet(wb, allTransSheet, "All Transactions");
 
-  // 3. CATEGORY SHEETS (combined from all documents)
+  // 3. CATEGORY SHEETS (combined from all documents) - CRITICAL FIX
   Object.entries(results).forEach(([category, transactions]) => {
     if (transactions.length === 0) return;
 
@@ -472,8 +498,8 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
       [''],
       ['Category Summary:'],
       [`Total Transactions: ${transactions.length}`],
-      [`Total Debits: ${formatCurrency(transactions.filter(t => t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
-      [`Total Credits: ${formatCurrency(transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + t.amount, 0))}`],
+      [`Total Debits: ${formatCurrency(transactions.filter(t => t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0))}`],
+      [`Total Credits: ${formatCurrency(transactions.filter(t => !t.isDebit).reduce((sum, t) => sum + safeParseFloat(t.amount), 0))}`],
       [''],
       ['BREAKDOWN BY DOCUMENT:'],
       ['Document', 'Count', 'Debits', 'Credits', 'Net']
@@ -487,9 +513,9 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
       }
       docBreakdown[t.sourceFile].count++;
       if (t.isDebit) {
-        docBreakdown[t.sourceFile].debits += t.amount;
+        docBreakdown[t.sourceFile].debits += safeParseFloat(t.amount);
       } else {
-        docBreakdown[t.sourceFile].credits += t.amount;
+        docBreakdown[t.sourceFile].credits += safeParseFloat(t.amount);
       }
     });
 
@@ -509,33 +535,38 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
 
     transactions
       .sort((a, b) => {
-        const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
-        const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
-        return dateA - dateB;
+        try {
+          const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+          const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+          return dateA - dateB;
+        } catch (e) {
+          return 0;
+        }
       })
       .forEach(transaction => {
+        // CRITICAL FIX: Each field in its own column - NOT concatenated
         categoryData.push([
           formatDate(transaction.transactionDate),
           formatDate(transaction.valueDate),
-          transaction.description,
-          transaction.isDebit ? transaction.amount : '',
-          !transaction.isDebit ? transaction.amount : '',
-          transaction.balance,
-          transaction.sourceFile,
+          transaction.description || '',
+          transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+          !transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+          safeParseFloat(transaction.balance),
+          transaction.sourceFile || '',
           transaction.confidence ? `${(transaction.confidence * 100).toFixed(0)}%` : 'N/A'
         ]);
       });
 
     const categorySheet = XLSX.utils.aoa_to_sheet(categoryData);
     categorySheet['!cols'] = [
-      { width: 12 },
-      { width: 12 },
-      { width: 40 },
-      { width: 15 },
-      { width: 15 },
-      { width: 15 },
-      { width: 30 },
-      { width: 12 }
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 50 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 40 },
+      { wch: 12 }
     ];
 
     const sheetName = category.replace(/[\/\\*?[\]]/g, '_').substring(0, 31);
@@ -551,7 +582,7 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
       ['Please review each transaction and assign appropriate categories.'],
       [''],
       [`Total Uncategorized: ${uncategorizedData.length}`],
-      [`Total Amount: ${formatCurrency(uncategorizedData.reduce((sum, t) => sum + t.amount, 0))}`],
+      [`Total Amount: ${formatCurrency(uncategorizedData.reduce((sum, t) => sum + safeParseFloat(t.amount), 0))}`],
       [''],
       ['BREAKDOWN BY DOCUMENT:'],
       ['Document', 'Count', 'Amount']
@@ -564,7 +595,7 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
         uncatByDoc[t.sourceFile] = { count: 0, amount: 0 };
       }
       uncatByDoc[t.sourceFile].count++;
-      uncatByDoc[t.sourceFile].amount += t.amount;
+      uncatByDoc[t.sourceFile].amount += safeParseFloat(t.amount);
     });
 
     Object.entries(uncatByDoc).forEach(([doc, data]) => {
@@ -577,19 +608,23 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
 
     uncategorizedData
       .sort((a, b) => {
-        const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
-        const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
-        return dateA - dateB;
+        try {
+          const dateA = new Date(a.transactionDate.split('/').reverse().join('-'));
+          const dateB = new Date(b.transactionDate.split('/').reverse().join('-'));
+          return dateA - dateB;
+        } catch (e) {
+          return 0;
+        }
       })
       .forEach(transaction => {
         uncategorizedSheetData.push([
           formatDate(transaction.transactionDate),
           formatDate(transaction.valueDate),
-          transaction.description,
-          transaction.isDebit ? transaction.amount : '',
-          !transaction.isDebit ? transaction.amount : '',
-          transaction.balance,
-          transaction.sourceFile,
+          transaction.description || '',
+          transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+          !transaction.isDebit ? safeParseFloat(transaction.amount) : '',
+          safeParseFloat(transaction.balance),
+          transaction.sourceFile || '',
           '[Manual Entry Required]',
           transaction.reason || 'No matching pattern'
         ]);
@@ -597,15 +632,15 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
 
     const uncategorizedSheet = XLSX.utils.aoa_to_sheet(uncategorizedSheetData);
     uncategorizedSheet['!cols'] = [
-      { width: 12 },
-      { width: 12 },
-      { width: 40 },
-      { width: 15 },
-      { width: 15 },
-      { width: 15 },
-      { width: 30 },
-      { width: 20 },
-      { width: 25 }
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 50 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 15 },
+      { wch: 40 },
+      { wch: 20 },
+      { wch: 30 }
     ];
 
     XLSX.utils.book_append_sheet(wb, uncategorizedSheet, "⚠️ UNCATEGORIZED");
@@ -627,14 +662,14 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
       
       Object.values(results).forEach(transactions => {
         transactions.filter(t => t.sourceFile === fileName).forEach(t => {
-          if (t.isDebit) fileDebits += t.amount;
-          else fileCredits += t.amount;
+          if (t.isDebit) fileDebits += safeParseFloat(t.amount);
+          else fileCredits += safeParseFloat(t.amount);
         });
       });
       
       uncategorizedData.filter(t => t.sourceFile === fileName).forEach(t => {
-        if (t.isDebit) fileDebits += t.amount;
-        else fileCredits += t.amount;
+        if (t.isDebit) fileDebits += safeParseFloat(t.amount);
+        else fileCredits += safeParseFloat(t.amount);
       });
       
       const calculatedClosing = (metadata.openingBalance || 0) - fileDebits + fileCredits;
@@ -666,13 +701,13 @@ const generateCombinedFile = async (XLSX, results, uncategorizedData, fileStats,
 
   const balanceSheet = XLSX.utils.aoa_to_sheet(balanceData);
   balanceSheet['!cols'] = [
-    { width: 35 },
-    { width: 20 },
-    { width: 20 },
-    { width: 20 },
-    { width: 20 },
-    { width: 20 },
-    { width: 15 }
+    { wch: 40 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 20 },
+    { wch: 15 }
   ];
   
   XLSX.utils.book_append_sheet(wb, balanceSheet, "Balance Tracking");
